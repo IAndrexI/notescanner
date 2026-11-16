@@ -53,16 +53,28 @@ body, html {
    Header & Navigation
    ======================================================== */
 .app-header {
-  height: 60px;
-  background: rgba(15, 23, 42, 0.95);
-  backdrop-filter: blur(10px);
+  height: auto;
+  min-height: calc(56px + max(env(safe-area-inset-top, 0px), 38px));
+  padding-top: max(env(safe-area-inset-top, 0px), 38px);
+  padding-bottom: 0.65rem;
+  padding-left: max(env(safe-area-inset-left, 0px), 1rem);
+  padding-right: max(env(safe-area-inset-right, 0px), 1rem);
+  background: rgba(15, 23, 42, 0.98);
+  backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border-color);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 1rem;
   z-index: 50;
   flex-shrink: 0;
+}
+
+@media (min-width: 800px) and (pointer: fine) {
+  .app-header {
+    min-height: 60px;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
 }
 
 .header-brand {
