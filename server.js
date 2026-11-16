@@ -753,8 +753,8 @@ app.get('/api/updates/download-apk', (req, res) => {
     return stream.pipe(res);
   }
 
-  // If local APK is not found, redirect to GitHub releases
-  res.redirect(`https://github.com/IAndrexI/notescanner/releases/latest`);
+  // If local APK is not found, redirect to GitHub raw direct download
+  res.redirect(`https://github.com/IAndrexI/notescanner/raw/main/NoteScan.apk`);
 });
 
 // API: Check if local Seafile desktop client directory exists on PC (Windows, Linux, macOS)
