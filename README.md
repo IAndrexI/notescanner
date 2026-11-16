@@ -92,6 +92,29 @@ chmod +x start.sh
 
 ---
 
+## 🔄 Updating NoteScan from GitHub
+
+NoteScan features a **built-in auto-updater** so you never have to manually reconfigure anything:
+
+### Method 1: In-App 1-Click Update (Recommended ⭐)
+* Open NoteScan in your browser or app.
+* Go to **Settings (⚙️)** → tap **"1-Click Update from GitHub"**.
+* NoteScan pulls the latest commits, updates dependencies, restarts the service, and refreshes the browser automatically!
+
+### Method 2: On Proxmox / Linux Terminal
+Whenever you push changes to GitHub, update your Proxmox container with one command:
+```bash
+/opt/notescan/update.sh
+```
+
+### Method 3: On Windows
+Double-click `update.bat`.
+
+### Method 4: Update Android APK
+* Open NoteScan on your phone → tap the **🚀 Update** badge or go to **Settings** → tap **"Download Updated NoteScan.apk"** to install directly on your device.
+
+---
+
 ## 📱 Connecting Your Android Phone
 
 1. On your PC or Proxmox web interface (`http://<ip>:3000`), navigate to **PC Notes**.

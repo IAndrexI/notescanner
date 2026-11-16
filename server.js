@@ -526,33 +526,80 @@ app.get('/api/seafile/file-url', async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// In-App Updater Endpoints
+// In-App & Server Auto-Updater (GitHub Releases & Commits)
 // -------------------------------------------------------------
 
-// API: Check for GitHub releases updates
+function getLocalCommitHash() {
+  try {
+    const { execSync } = require('child_process');
+    return execSync('git rev-parse --short HEAD', { cwd: __dirname }).toString().trim();
+  } catch (e) {
+    return 'unknown';
+  }
+}
+
+// API: Check for GitHub updates (both releases/tags and commits)
 app.get('/api/updates/check', async (req, res) => {
   const currentVersion = pkg.version || '1.0.0';
   const repoOwner = 'IAndrexI';
   const repoName = 'notescanner';
   const releasesUrl = `https://api.github.com/repos/${repoOwner}/${repoName}/releases/latest`;
   const tagsUrl = `https://api.github.com/repos/${repoOwner}/${repoName}/tags`;
+  const commitsUrl = `https://api.github.com/repos/${repoOwner}/${repoName}/commits/main`;
+
+  const localCommit = getLocalCommitHash();
 
   // Support simulated update for testing / verification
   if (req.query.simulate === 'true' || process.env.SIMULATE_UPDATE === 'true') {
     return res.json({
       hasUpdate: true,
+      hasGitUpdate: true,
+      localCommit,
       currentVersion,
-      latestVersion: '1.1.0',
-      releaseName: 'NoteScan v1.1.0 (Seafile & In-App Updater Release)',
-      releaseNotes: '• Direct APK in-app updater with 1-tap download\n• Seafile health check & exponential backoff\n• 1-tap public note sharing links\n• Persistent auth token caching',
+      latestVersion: '1.2.0',
+      latestCommit: {
+        sha: 'a1b2c3d',
+        message: 'Feature: Direct GitHub 1-click updates & enhanced handwriting OCR',
+        date: new Date().toISOString()
+      },
+      releaseName: 'NoteScan v1.2.0 (GitHub 1-Click Update Release)',
+      releaseNotes: '• Direct 1-click update from GitHub in app\n• Handwriting to digital font converter with drawing preservation\n• Direct APK in-app updater with 1-tap download\n• Seafile health check & exponential backoff',
       publishedAt: new Date().toISOString(),
-      htmlUrl: `https://github.com/${repoOwner}/${repoName}/releases/tag/v1.1.0`,
+      htmlUrl: `https://github.com/${repoOwner}/${repoName}`,
       apkUrl: '/api/updates/download-apk',
       apkDirectDownload: '/api/updates/download-apk'
     });
   }
 
   try {
+    let latestCommit = null;
+    let hasGitUpdate = false;
+
+    // Check latest commit on main branch
+    try {
+      const commitRes = await fetch(commitsUrl, {
+        headers: {
+          'User-Agent': `NoteScan-App/${currentVersion}`,
+          'Accept': 'application/vnd.github.v3+json'
+        }
+      });
+      if (commitRes.ok) {
+        const cData = await commitRes.json();
+        const remoteShaShort = (cData.sha || '').slice(0, 7);
+        if (localCommit !== 'unknown' && remoteShaShort && !localCommit.startsWith(remoteShaShort) && !remoteShaShort.startsWith(localCommit)) {
+          hasGitUpdate = true;
+        }
+        latestCommit = {
+          sha: remoteShaShort,
+          message: cData.commit?.message?.split('\n')[0] || '',
+          date: cData.commit?.author?.date || null,
+          author: cData.commit?.author?.name || ''
+        };
+      }
+    } catch (commitErr) {
+      console.warn('[Updater] Could not fetch GitHub commits:', commitErr.message);
+    }
+
     const ghRes = await fetch(releasesUrl, {
       headers: {
         'User-Agent': `NoteScan-App/${currentVersion}`,
@@ -565,7 +612,8 @@ app.get('/api/updates/check', async (req, res) => {
       const latestTag = release.tag_name || release.name || '';
       const latestVersion = latestTag.replace(/^v/i, '').trim();
 
-      const hasUpdate = compareSemver(latestVersion, currentVersion) > 0;
+      const hasSemverUpdate = compareSemver(latestVersion, currentVersion) > 0;
+      const hasUpdate = hasSemverUpdate || hasGitUpdate;
 
       // Locate APK asset in release if available
       let apkAsset = null;
@@ -575,6 +623,9 @@ app.get('/api/updates/check', async (req, res) => {
 
       return res.json({
         hasUpdate,
+        hasGitUpdate,
+        localCommit,
+        latestCommit,
         currentVersion,
         latestVersion,
         releaseName: release.name || latestTag,
@@ -599,15 +650,20 @@ app.get('/api/updates/check', async (req, res) => {
         const tags = await tagsRes.json();
         if (Array.isArray(tags) && tags.length > 0) {
           const topTag = tags[0].name.replace(/^v/i, '').trim();
-          const hasUpdate = compareSemver(topTag, currentVersion) > 0;
+          const hasSemverUpdate = compareSemver(topTag, currentVersion) > 0;
+          const hasUpdate = hasSemverUpdate || hasGitUpdate;
+
           return res.json({
             hasUpdate,
+            hasGitUpdate,
+            localCommit,
+            latestCommit,
             currentVersion,
             latestVersion: topTag,
             releaseName: `NoteScan v${topTag}`,
             releaseNotes: 'New version available on GitHub.',
             publishedAt: null,
-            htmlUrl: `https://github.com/${repoOwner}/${repoName}/releases/tag/${tags[0].name}`,
+            htmlUrl: `https://github.com/${repoOwner}/${repoName}`,
             apkUrl: '/api/updates/download-apk',
             apkDirectDownload: '/api/updates/download-apk'
           });
@@ -615,22 +671,76 @@ app.get('/api/updates/check', async (req, res) => {
       }
     }
 
-    // Default: Up to date or repository has no releases yet
+    // Default: Up to date or check commit status
     res.json({
-      hasUpdate: false,
+      hasUpdate: hasGitUpdate,
+      hasGitUpdate,
+      localCommit,
+      latestCommit,
       currentVersion,
       latestVersion: currentVersion,
-      message: 'NoteScan is up to date.'
+      htmlUrl: `https://github.com/${repoOwner}/${repoName}`,
+      apkUrl: '/api/updates/download-apk',
+      apkDirectDownload: '/api/updates/download-apk',
+      message: hasGitUpdate ? 'New commit available on GitHub.' : 'NoteScan is up to date.'
     });
   } catch (err) {
     console.warn('[Updater] Failed to check GitHub updates:', err.message);
     res.json({
       hasUpdate: false,
+      hasGitUpdate: false,
+      localCommit,
       currentVersion,
       latestVersion: currentVersion,
       error: `Could not check updates: ${err.message}`
     });
   }
+});
+
+// API: 1-Click Server Update directly from GitHub
+app.post('/api/updates/apply', (req, res) => {
+  const { exec } = require('child_process');
+  const isGitRepo = fs.existsSync(path.join(__dirname, '.git'));
+
+  if (!isGitRepo) {
+    return res.status(400).json({
+      error: 'This installation is not a Git clone. To enable 1-click updates, clone the project via git.'
+    });
+  }
+
+  console.log('[Updater] Pulling latest updates from GitHub (main)...');
+  const updateCmd = 'git fetch origin main && git reset --hard origin/main && npm install --omit=dev';
+
+  exec(updateCmd, { cwd: __dirname }, (error, stdout, stderr) => {
+    if (error) {
+      console.error('[Updater] Git update error:', error, stderr);
+      return res.status(500).json({ error: `Update failed: ${stderr || error.message}` });
+    }
+
+    const newCommit = getLocalCommitHash();
+    console.log(`[Updater] Updated to commit ${newCommit}`);
+
+    res.json({
+      success: true,
+      message: `Successfully updated to commit ${newCommit}! Server restarting in 2 seconds...`,
+      newCommit,
+      output: stdout
+    });
+
+    // Gracefully restart the service or process after sending response
+    setTimeout(() => {
+      // 1. Try Alpine OpenRC service
+      exec('which rc-service && rc-service notescan restart', (err1) => {
+        if (!err1) return;
+        // 2. Try Debian/Ubuntu systemd service
+        exec('which systemctl && systemctl restart notescan', (err2) => {
+          if (!err2) return;
+          // 3. Fallback: Exit process (Docker or supervisor will auto-restart)
+          process.exit(0);
+        });
+      });
+    }, 2000);
+  });
 });
 
 // API: 1-Tap direct download of NoteScan.apk

@@ -1,7 +1,7 @@
 /**
  * NoteScan In-App Updater (public/js/updater.js)
  * Checks for new releases on startup, shows an in-app modal / banner,
- * and enables 1-tap direct download of NoteScan.apk or web reload.
+ * enables 1-tap direct download of NoteScan.apk, and 1-click server update from GitHub.
  */
 class NoteScanUpdater {
   static init() {
@@ -16,7 +16,7 @@ class NoteScanUpdater {
   }
 
   /**
-   * Check for GitHub releases updates
+   * Check for GitHub releases updates and commits
    * @param {Object} options
    * @param {boolean} options.manual - True if triggered by user click (shows up-to-date toast)
    * @param {boolean} options.simulate - True to simulate an available update for testing
@@ -26,17 +26,23 @@ class NoteScanUpdater {
 
     try {
       if (manual && window.showToast) {
-        window.showToast('Checking for updates...', 'info');
+        window.showToast('Checking GitHub for updates...', 'info');
       }
 
       const updateData = await SeafileApi.checkUpdates(simulate);
 
-      if (updateData.hasUpdate) {
+      // Update version display in Settings if elements exist
+      const gitCommitElem = document.getElementById('current-git-commit');
+      if (gitCommitElem && updateData.localCommit) {
+        gitCommitElem.textContent = `${updateData.localCommit}`;
+      }
+
+      if (updateData.hasUpdate || updateData.hasGitUpdate) {
         NoteScanUpdater.showUpdatePrompt(updateData);
         NoteScanUpdater.showBadgeInHeader(updateData);
       } else if (manual) {
         if (window.showToast) {
-          window.showToast(`✓ NoteScan is up to date (v${updateData.currentVersion || '1.0.0'})!`, 'success');
+          window.showToast(`✓ NoteScan is up to date (${updateData.localCommit || `v${updateData.currentVersion}`})!`, 'success');
         }
       }
       return updateData;
@@ -50,12 +56,60 @@ class NoteScanUpdater {
   }
 
   /**
+   * Apply 1-Click Server Update directly from GitHub
+   */
+  static async applyServerUpdate() {
+    if (window.showLoading) {
+      window.showLoading('Pulling latest update from GitHub and restarting...');
+    }
+
+    try {
+      const res = await fetch(SeafileApi.apiUrl ? SeafileApi.apiUrl('/api/updates/apply') : '/api/updates/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Server update failed');
+      }
+
+      if (window.showToast) {
+        window.showToast('✓ Update applied! Restarting NoteScan in 3 seconds...', 'success');
+      }
+
+      // Clear Service Worker cache before reloading
+      if ('serviceWorker' in navigator) {
+        try {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          for (const r of regs) await r.update();
+          if ('caches' in window) {
+            const keys = await caches.keys();
+            for (const k of keys) await caches.delete(k);
+          }
+        } catch (e) {}
+      }
+
+      setTimeout(() => {
+        window.location.reload(true);
+      }, 3500);
+
+    } catch (err) {
+      if (window.hideLoading) window.hideLoading();
+      if (window.showToast) {
+        window.showToast(`Update error: ${err.message}`, 'error');
+      }
+    }
+  }
+
+  /**
    * Show in-app update banner / modal
    */
   static showUpdatePrompt(data) {
-    const dismissedKey = `notescan_dismissed_update_${data.latestVersion}`;
+    const targetVersion = data.latestCommit?.sha || data.latestVersion || 'latest';
+    const dismissedKey = `notescan_dismissed_update_${targetVersion}`;
     const dismissedTime = localStorage.getItem(dismissedKey);
-    // If dismissed in the last 24 hours and not manually checking, skip
+    // If dismissed in the last 24 hours, skip automatic popup
     if (dismissedTime && (Date.now() - parseInt(dismissedTime, 10)) < 24 * 60 * 60 * 1000) {
       return;
     }
@@ -65,9 +119,9 @@ class NoteScanUpdater {
     if (existing) existing.remove();
 
     const apkUrl = data.apkDirectDownload || SeafileApi.getApkDownloadUrl();
-    const releaseTitle = data.releaseName || `NoteScan v${data.latestVersion}`;
-    const releaseNotes = (data.releaseNotes || 'Bug fixes, speed improvements, and Seafile enhancements.')
-      .replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+    const releaseTitle = data.releaseName || (data.latestCommit ? `GitHub Commit ${data.latestCommit.sha}` : `NoteScan v${data.latestVersion}`);
+    const commitMsg = data.latestCommit?.message || data.releaseNotes || 'New features, bug fixes, and performance updates from GitHub.';
+    const sanitizedNotes = commitMsg.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
 
     const modal = document.createElement('div');
     modal.id = 'notescan-updater-modal';
@@ -88,36 +142,46 @@ class NoteScanUpdater {
 
         <div class="updater-body">
           <div class="updater-version-pills">
-            <span class="version-pill current">Current: v${data.currentVersion}</span>
+            <span class="version-pill current">Installed: ${data.localCommit || `v${data.currentVersion}`}</span>
             <span class="version-arrow">➔</span>
-            <span class="version-pill latest">New: v${data.latestVersion}</span>
+            <span class="version-pill latest">GitHub: ${data.latestCommit?.sha || data.latestVersion}</span>
           </div>
 
           <div class="updater-release-box">
-            <div class="updater-release-header">What's New:</div>
-            <div class="updater-release-content">${releaseNotes}</div>
+            <div class="updater-release-header">What's New on GitHub:</div>
+            <div class="updater-release-content">${sanitizedNotes}</div>
           </div>
 
           <div class="updater-options-notice">
-            Choose how you'd like to apply this update:
+            Choose how you would like to apply this update:
           </div>
         </div>
 
         <div class="updater-actions">
-          <a href="${apkUrl}" id="btn-updater-apk" class="btn btn-primary updater-btn-apk" download="NoteScan.apk">
+          <!-- 1-Click Server Update (Pulls from GitHub and restarts) -->
+          <button id="btn-updater-server-apply" class="btn btn-primary updater-btn-server">
+            <span>🚀</span>
+            <div class="btn-text-group">
+              <span class="btn-primary-text">1-Click Update Server from GitHub</span>
+              <span class="btn-subtext">Pulls latest code & restarts NoteScan service</span>
+            </div>
+          </button>
+
+          <!-- 1-Tap APK Download for Android users -->
+          <a href="${apkUrl}" id="btn-updater-apk" class="btn btn-secondary updater-btn-apk" download="NoteScan.apk">
             <span>📲</span>
             <div class="btn-text-group">
-              <span class="btn-primary-text">1-Tap Download NoteScan.apk</span>
-              <span class="btn-subtext">Direct install for Android</span>
+              <span class="btn-primary-text">Download Updated NoteScan.apk</span>
+              <span class="btn-subtext">For Android standalone app</span>
             </div>
           </a>
 
           <div class="updater-secondary-row">
-            <button id="btn-updater-reload" class="btn btn-secondary updater-btn-reload">
+            <button id="btn-updater-reload" class="btn btn-ghost updater-btn-reload">
               <span>🔄 Web Reload</span>
             </button>
             <button id="btn-updater-later" class="btn btn-ghost updater-btn-later">
-              Later
+              Dismiss
             </button>
           </div>
         </div>
@@ -128,11 +192,16 @@ class NoteScanUpdater {
 
     // Event listeners
     document.getElementById('btn-updater-close')?.addEventListener('click', () => {
-      NoteScanUpdater.dismiss(data.latestVersion);
+      NoteScanUpdater.dismiss(targetVersion);
     });
 
     document.getElementById('btn-updater-later')?.addEventListener('click', () => {
-      NoteScanUpdater.dismiss(data.latestVersion);
+      NoteScanUpdater.dismiss(targetVersion);
+    });
+
+    document.getElementById('btn-updater-server-apply')?.addEventListener('click', () => {
+      NoteScanUpdater.dismiss(targetVersion);
+      NoteScanUpdater.applyServerUpdate();
     });
 
     document.getElementById('btn-updater-apk')?.addEventListener('click', () => {
@@ -140,7 +209,7 @@ class NoteScanUpdater {
         window.showToast('📥 Downloading NoteScan.apk...', 'success');
       }
       setTimeout(() => {
-        NoteScanUpdater.dismiss(data.latestVersion);
+        NoteScanUpdater.dismiss(targetVersion);
       }, 2000);
     });
 
@@ -148,22 +217,16 @@ class NoteScanUpdater {
       if (window.showToast) {
         window.showToast('Clearing cache and reloading...', 'info');
       }
-      // Clear Service Worker cache if present
       if ('serviceWorker' in navigator) {
         try {
           const registrations = await navigator.serviceWorker.getRegistrations();
-          for (let reg of registrations) {
-            await reg.update();
-          }
+          for (let reg of registrations) await reg.update();
           if ('caches' in window) {
             const keys = await caches.keys();
-            for (let key of keys) {
-              await caches.delete(key);
-            }
+            for (let key of keys) await caches.delete(key);
           }
         } catch (e) {}
       }
-      // Force page reload from server
       window.location.reload(true);
     });
   }
@@ -180,22 +243,24 @@ class NoteScanUpdater {
   }
 
   static showBadgeInHeader(data) {
-    const headerBrand = document.querySelector('.header-brand');
-    if (!headerBrand) return;
+    const headerNav = document.querySelector('.header-nav');
+    if (!headerNav || document.getElementById('nav-update-pill')) return;
 
-    let badge = document.getElementById('updater-header-pill');
-    if (!badge) {
-      badge = document.createElement('button');
-      badge.id = 'updater-header-pill';
-      badge.className = 'updater-header-pill';
-      badge.title = `Click to update to v${data.latestVersion}`;
-      badge.onclick = () => NoteScanUpdater.showUpdatePrompt(data);
-      headerBrand.appendChild(badge);
-    }
-    badge.innerHTML = `<span class="pulse-dot"></span> v${data.latestVersion} Available`;
+    const pill = document.createElement('button');
+    pill.id = 'nav-update-pill';
+    pill.className = 'nav-tab nav-update-badge animate-pulse';
+    pill.innerHTML = `
+      <span class="tab-icon">🚀</span>
+      <span class="tab-label">Update</span>
+    `;
+    pill.title = 'New version or commit available from GitHub';
+    pill.addEventListener('click', () => {
+      NoteScanUpdater.showUpdatePrompt(data);
+    });
+
+    headerNav.insertBefore(pill, headerNav.firstChild);
   }
 }
 
-// Auto-initialize
-NoteScanUpdater.init();
 window.NoteScanUpdater = NoteScanUpdater;
+NoteScanUpdater.init();

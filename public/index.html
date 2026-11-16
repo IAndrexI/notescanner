@@ -418,14 +418,17 @@
           <div class="settings-section">
             <div class="settings-section-header">
               <div>
-                <h4 class="settings-subtitle">🔄 In-App Updates & APK</h4>
-                <p class="text-xs text-muted">Version <span id="settings-app-version">1.0.0</span> • Direct APK download & web updates</p>
+                <h4 class="settings-subtitle">🔄 In-App Updates & GitHub</h4>
+                <p class="text-xs text-muted">Version <span id="settings-app-version">1.0.0</span> (<span id="current-git-commit">latest</span>) • Push to GitHub & 1-click update</p>
               </div>
-              <button type="button" id="btn-check-updates" class="btn btn-secondary btn-sm" onclick="NoteScanUpdater.check({ manual: true })">🔍 Check Updates</button>
+              <button type="button" id="btn-check-updates" class="btn btn-secondary btn-sm" onclick="NoteScanUpdater.check({ manual: true })">🔍 Check GitHub</button>
             </div>
-            <div class="mt-2">
+            <div class="mt-2" style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+              <button type="button" class="btn btn-primary btn-sm" onclick="NoteScanUpdater.applyServerUpdate()">
+                <span>🚀</span> 1-Click Update from GitHub
+              </button>
               <a href="/api/updates/download-apk" class="btn btn-secondary btn-sm" download="NoteScan.apk" style="display: inline-flex; align-items: center; gap: 0.4rem; text-decoration: none;">
-                <span>📲</span> Direct Download NoteScan.apk
+                <span>📲</span> Download APK
               </a>
             </div>
           </div>
