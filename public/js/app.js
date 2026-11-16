@@ -175,6 +175,8 @@ async function initCamera() {
     }
   } catch (err) {
     console.warn('Camera could not start immediately:', err);
+    const placeholder = document.getElementById('camera-placeholder');
+    if (placeholder) placeholder.classList.add('hidden');
     if (fallbackCard) fallbackCard.style.display = 'block';
     if (directBtn) directBtn.style.display = 'flex';
     showToast('Live camera paused or unavailable. Tap "Capture with Camera" for native photo shutter.', 'info');

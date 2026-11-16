@@ -22,6 +22,12 @@ class CameraScanner {
       this.video.setAttribute('autoplay', 'true');
       this.video.setAttribute('muted', 'true');
       this.video.muted = true;
+
+      this.video.addEventListener('playing', () => {
+        this.video.classList.add('camera-streaming');
+        const placeholder = document.getElementById('camera-placeholder');
+        if (placeholder) placeholder.classList.add('hidden');
+      });
     }
   }
 
@@ -125,6 +131,9 @@ class CameraScanner {
 
           await this.video.play();
           this.isActive = true;
+          this.video.classList.add('camera-streaming');
+          const placeholder = document.getElementById('camera-placeholder');
+          if (placeholder) placeholder.classList.add('hidden');
 
           // Check if torch/flash is supported by the camera track
           const track = this.getVideoTrack();
@@ -185,6 +194,11 @@ class CameraScanner {
     }
     if (this.video) {
       this.video.srcObject = null;
+      this.video.classList.remove('camera-streaming');
+    }
+    const placeholder = document.getElementById('camera-placeholder');
+    if (placeholder) {
+      placeholder.classList.remove('hidden');
     }
   }
 
