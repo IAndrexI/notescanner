@@ -7,3 +7,7 @@ build/
 npm-debug.log*
 .DS_Store
 Thumbs.db
+android/app/build/
+android/.gradle/
+android/local.properties
+*.apk
