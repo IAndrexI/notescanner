@@ -56,20 +56,73 @@ class NoteScanUpdater {
   }
 
   /**
+   * Helper to detect if running inside Android APK / Capacitor native wrapper
+   */
+  static isNative() {
+    return Boolean(
+      (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) ||
+      (window.location.origin.includes('localhost') && /Android|iPhone|iPad/i.test(navigator.userAgent)) ||
+      window.location.origin.startsWith('capacitor:') ||
+      window.location.origin.startsWith('file:')
+    );
+  }
+
+  /**
+   * Safely download the latest NoteScan.apk from GitHub
+   */
+  static downloadApk() {
+    if (window.showToast) {
+      window.showToast('📥 Downloading latest NoteScan.apk...', 'success');
+    }
+    const apkUrl = 'https://github.com/IAndrexI/notescanner/raw/main/NoteScan.apk';
+    const a = document.createElement('a');
+    a.href = apkUrl;
+    a.download = 'NoteScan.apk';
+    a.target = '_blank';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => a.remove(), 1000);
+  }
+
+  /**
+   * Action handler for settings update button
+   */
+  static handleUpdateAction() {
+    if (NoteScanUpdater.isNative()) {
+      NoteScanUpdater.downloadApk();
+    } else {
+      NoteScanUpdater.applyServerUpdate();
+    }
+  }
+
+  /**
    * Apply 1-Click Server Update directly from GitHub
    */
   static async applyServerUpdate() {
+    if (NoteScanUpdater.isNative()) {
+      NoteScanUpdater.downloadApk();
+      return;
+    }
+
     if (window.showLoading) {
       window.showLoading('Pulling latest update from GitHub and restarting...');
     }
 
     try {
-      const res = await fetch(SeafileApi.apiUrl ? SeafileApi.apiUrl('/api/updates/apply') : '/api/updates/apply', {
+      const targetUrl = SeafileApi.apiUrl ? SeafileApi.apiUrl('/api/updates/apply') : '/api/updates/apply';
+      const res = await fetch(targetUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
       });
 
-      const data = await res.json();
+      const text = await res.text();
+      let data = {};
+      try {
+        data = JSON.parse(text);
+      } catch (parseErr) {
+        throw new Error('Server returned HTML or non-JSON response. If running on Android, please download NoteScan.apk.');
+      }
+
       if (!res.ok) {
         throw new Error(data.error || 'Server update failed');
       }
@@ -97,7 +150,7 @@ class NoteScanUpdater {
     } catch (err) {
       if (window.hideLoading) window.hideLoading();
       if (window.showToast) {
-        window.showToast(`Update error: ${err.message}`, 'error');
+        window.showToast(`Update notice: ${err.message}`, 'error');
       }
     }
   }
@@ -122,6 +175,11 @@ class NoteScanUpdater {
     const releaseTitle = data.releaseName || (data.latestCommit ? `GitHub Commit ${data.latestCommit.sha}` : `NoteScan v${data.latestVersion}`);
     const commitMsg = data.latestCommit?.message || data.releaseNotes || 'New features, bug fixes, and performance updates from GitHub.';
     const sanitizedNotes = commitMsg.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+
+    const isNativeApp = NoteScanUpdater.isNative();
+    const serverBtnStyle = isNativeApp ? 'style="display: none;"' : '';
+    const apkBtnClass = isNativeApp ? 'btn-primary' : 'btn-secondary';
+    const apkBtnSubtext = isNativeApp ? 'Tap to download and install latest update' : 'For Android standalone app';
 
     const modal = document.createElement('div');
     modal.id = 'notescan-updater-modal';
@@ -158,23 +216,23 @@ class NoteScanUpdater {
         </div>
 
         <div class="updater-actions">
+          <!-- 1-Tap APK Download for Android users -->
+          <a href="${apkUrl}" id="btn-updater-apk" class="btn ${apkBtnClass} updater-btn-apk" download="NoteScan.apk">
+            <span>📲</span>
+            <div class="btn-text-group">
+              <span class="btn-primary-text">Download Updated NoteScan.apk</span>
+              <span class="btn-subtext">${apkBtnSubtext}</span>
+            </div>
+          </a>
+
           <!-- 1-Click Server Update (Pulls from GitHub and restarts) -->
-          <button id="btn-updater-server-apply" class="btn btn-primary updater-btn-server">
+          <button id="btn-updater-server-apply" class="btn btn-primary updater-btn-server" ${serverBtnStyle}>
             <span>🚀</span>
             <div class="btn-text-group">
               <span class="btn-primary-text">1-Click Update Server from GitHub</span>
               <span class="btn-subtext">Pulls latest code & restarts NoteScan service</span>
             </div>
           </button>
-
-          <!-- 1-Tap APK Download for Android users -->
-          <a href="${apkUrl}" id="btn-updater-apk" class="btn btn-secondary updater-btn-apk" download="NoteScan.apk">
-            <span>📲</span>
-            <div class="btn-text-group">
-              <span class="btn-primary-text">Download Updated NoteScan.apk</span>
-              <span class="btn-subtext">For Android standalone app</span>
-            </div>
-          </a>
 
           <div class="updater-secondary-row">
             <button id="btn-updater-reload" class="btn btn-ghost updater-btn-reload">

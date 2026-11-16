@@ -155,14 +155,56 @@ class SeafileApi {
 
   // In-App Update Checker
   static async checkUpdates(simulate = false) {
-    const url = SeafileApi.apiUrl(`/api/updates/check${simulate ? '?simulate=true' : ''}`);
-    const res = await fetch(url);
-    if (!res.ok) throw new Error('Failed to check for updates');
-    return await res.json();
+    // 1. Try local server endpoint if available
+    try {
+      const url = SeafileApi.apiUrl(`/api/updates/check${simulate ? '?simulate=true' : ''}`);
+      const res = await fetch(url);
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
+        const data = await res.json();
+        if (data && typeof data === 'object') {
+          return data;
+        }
+      }
+    } catch (e) {
+      console.warn('[SeafileApi] Local update endpoint unavailable, falling back to GitHub API:', e.message);
+    }
+
+    // 2. Direct GitHub public API fallback (works directly inside Android APK and offline PC)
+    try {
+      const ghRes = await fetch('https://api.github.com/repos/IAndrexI/notescanner/commits/main');
+      if (ghRes.ok) {
+        const ghData = await ghRes.json();
+        const shortSha = (ghData.sha || '').substring(0, 7);
+        const commitMsg = ghData.commit?.message || 'Latest GitHub release';
+        const localCommit = localStorage.getItem('notescan_last_seen_commit') || 'latest';
+        const hasUpdate = localCommit !== shortSha && localCommit !== 'latest';
+        return {
+          hasUpdate,
+          hasGitUpdate: hasUpdate,
+          localCommit,
+          latestCommit: { sha: shortSha, message: commitMsg },
+          currentVersion: '1.0.0',
+          latestVersion: shortSha,
+          apkUrl: 'https://github.com/IAndrexI/notescanner/raw/main/NoteScan.apk',
+          apkDirectDownload: 'https://github.com/IAndrexI/notescanner/raw/main/NoteScan.apk'
+        };
+      }
+    } catch (ghErr) {
+      console.warn('[SeafileApi] GitHub public API fallback error:', ghErr.message);
+    }
+
+    return {
+      hasUpdate: false,
+      currentVersion: '1.0.0',
+      apkUrl: 'https://github.com/IAndrexI/notescanner/raw/main/NoteScan.apk',
+      apkDirectDownload: 'https://github.com/IAndrexI/notescanner/raw/main/NoteScan.apk',
+      message: 'Could not reach server or GitHub'
+    };
   }
 
   static getApkDownloadUrl() {
-    return SeafileApi.apiUrl('/api/updates/download-apk');
+    return 'https://github.com/IAndrexI/notescanner/raw/main/NoteScan.apk';
   }
 
   static async getLocalSeafileInfo() {
