@@ -65,10 +65,31 @@ class SeafileApi {
     const res = await fetch(SeafileApi.apiUrl('/api/seafile/test'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ serverUrl, token })
+      body: JSON.stringify({ serverUrl, token, autoSaveRepo: true })
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Connection failed');
+    return data;
+  }
+
+  // Health check
+  static async checkHealth() {
+    try {
+      const res = await fetch(SeafileApi.apiUrl('/api/seafile/health'));
+      return await res.json();
+    } catch (e) {
+      return { healthy: false, error: e.message };
+    }
+  }
+
+  // Auto-library selection
+  static async autoSelectRepo() {
+    const res = await fetch(SeafileApi.apiUrl('/api/seafile/auto-select-repo'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to auto-select library');
     return data;
   }
 
@@ -113,6 +134,35 @@ class SeafileApi {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to get file URL');
     return data.url;
+  }
+
+  // Seafile Public Share Link Generation (/api2/repos/:repo_id/file/shared-link/)
+  static async createShareLink(repoId, filePath, options = {}) {
+    const res = await fetch(SeafileApi.apiUrl('/api/seafile/share-link'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        repoId,
+        path: filePath,
+        password: options.password || undefined,
+        expire: options.expire || undefined
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to create share link');
+    return data;
+  }
+
+  // In-App Update Checker
+  static async checkUpdates(simulate = false) {
+    const url = SeafileApi.apiUrl(`/api/updates/check${simulate ? '?simulate=true' : ''}`);
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('Failed to check for updates');
+    return await res.json();
+  }
+
+  static getApkDownloadUrl() {
+    return SeafileApi.apiUrl('/api/updates/download-apk');
   }
 
   static async getLocalSeafileInfo() {

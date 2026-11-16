@@ -1,11 +1,21 @@
 /**
- * VisionEngine: Fast Computer Vision for Document Scanning,
- * Corner Snapping, Perspective Transformation, and Rocketbook Filters.
+ * VisionEngine: High-Performance Computer Vision for Document Scanning,
+ * Corner Snapping, Perspective Transformation, and Authentic Rocketbook Filters.
+ *
+ * Upgrades:
+ * - Flat-field illumination normalization using large-kernel background estimation
+ *   to eliminate desk shadows, ambient gradients, and paper yellowing.
+ * - Laplacian edge enhancement / unsharp mask filtering for razor-sharp handwritten ink.
+ * - Intelligent color saturation boost for blue, black, red, and green pen inks
+ *   while locking the notebook page to pure #FFFFFF white.
+ * - Enhanced B&W adaptive thresholding (Bradley-Roth) and grayscale modes.
  */
 class VisionEngine {
   constructor() {
-    this.cachedCanvas = document.createElement('canvas');
-    this.cachedCtx = this.cachedCanvas.getContext('2d', { willReadFrequently: true });
+    if (typeof document !== 'undefined') {
+      this.cachedCanvas = document.createElement('canvas');
+      this.cachedCtx = this.cachedCanvas.getContext('2d', { willReadFrequently: true });
+    }
   }
 
   // Distance between two 2D points
@@ -21,15 +31,7 @@ class VisionEngine {
     const cx = points.reduce((acc, p) => acc + p.x, 0) / 4;
     const cy = points.reduce((acc, p) => acc + p.y, 0) / 4;
 
-    // Sort by angle relative to center
-    const sorted = [...points].sort((a, b) => {
-      const angleA = Math.atan2(a.y - cy, a.x - cx);
-      const angleB = Math.atan2(b.y - cy, b.x - cx);
-      return angleA - angleB;
-    });
-
-    // Top-left is in upper-left quadrant (angles around -3*pi/4)
-    // Find the point with minimum (x + y)
+    // Find corners using coordinate sums and differences
     let tlIndex = 0;
     let minSum = Infinity;
     points.forEach((p, idx) => {
@@ -40,7 +42,6 @@ class VisionEngine {
       }
     });
 
-    // Rotate array so Top-Left is at index 0
     let brIndex = 0;
     let maxSum = -Infinity;
     points.forEach((p, idx) => {
@@ -106,7 +107,7 @@ class VisionEngine {
       gray[j] = Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
     }
 
-    // 2. Simple Sobel gradient / edge energy map
+    // 2. Sobel gradient / edge energy map
     const edges = new Uint8Array(sw * sh);
     for (let y = 1; y < sh - 1; y++) {
       for (let x = 1; x < sw - 1; x++) {
@@ -138,7 +139,6 @@ class VisionEngine {
       let bestR = Math.min(sw, sh) * 0.42;
       let maxGrad = 0;
 
-      // Scan along the diagonal ray
       const maxR = Math.min(
         cosA > 0 ? (sw - cx - 10) / cosA : (-cx + 10) / cosA,
         sinA > 0 ? (sh - cy - 10) / sinA : (-cy + 10) / sinA
@@ -174,7 +174,7 @@ class VisionEngine {
     return ordered;
   }
 
-  // Default inset corners (10% padding from borders)
+  // Default inset corners (8% padding from borders)
   getDefaultCorners(width, height) {
     const padX = width * 0.08;
     const padY = height * 0.08;
@@ -287,7 +287,6 @@ class VisionEngine {
 
   // Compute inverse homography matrix
   computeInverseHomography(srcPts, dstPts) {
-    // We want mapping from dst -> src
     return this.getPerspectiveTransformMatrix(dstPts, srcPts);
   }
 
@@ -309,7 +308,6 @@ class VisionEngine {
       b.push(dy);
     }
 
-    // Solve 8x8 linear system via Gaussian elimination
     const h = this.gaussianElimination(a, b);
     return [h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 1];
   }
@@ -359,150 +357,398 @@ class VisionEngine {
     return x;
   }
 
-  // Apply Document Filters (Magic Ink, B&W, Grayscale, Original)
-  applyFilter(canvas, filterType = 'magic') {
+  // --------------------------------------------------------------------------
+  // ROCKETBOOK-GRADE VISION FILTERS
+  // --------------------------------------------------------------------------
+
+  /**
+   * Fast 2D Separable Box Blur for single-channel float array.
+   * O(w * h) linear runtime independent of kernel radius.
+   */
+  boxBlurChannel(src, w, h, radius) {
+    const r = Math.max(1, Math.round(radius));
+    const temp = new Float32Array(w * h);
+    const dst = new Float32Array(w * h);
+
+    // Pass 1: Horizontal sliding window
+    for (let y = 0; y < h; y++) {
+      const row = y * w;
+      let sum = 0;
+      let count = 0;
+
+      // Initial window [-r .. r]
+      for (let x = -r; x <= r; x++) {
+        if (x >= 0 && x < w) {
+          sum += src[row + x];
+          count++;
+        }
+      }
+
+      for (let x = 0; x < w; x++) {
+        temp[row + x] = sum / count;
+        const addX = x + r + 1;
+        const remX = x - r;
+        if (addX < w) {
+          sum += src[row + addX];
+          count++;
+        }
+        if (remX >= 0) {
+          sum -= src[row + remX];
+          count--;
+        }
+      }
+    }
+
+    // Pass 2: Vertical sliding window
+    for (let x = 0; x < w; x++) {
+      let sum = 0;
+      let count = 0;
+
+      // Initial window [-r .. r]
+      for (let y = -r; y <= r; y++) {
+        if (y >= 0 && y < h) {
+          sum += temp[y * w + x];
+          count++;
+        }
+      }
+
+      for (let y = 0; y < h; y++) {
+        dst[y * w + x] = sum / count;
+        const addY = y + r + 1;
+        const remY = y - r;
+        if (addY < h) {
+          sum += temp[addY * w + x];
+          count++;
+        }
+        if (remY >= 0) {
+          sum -= temp[remY * w + x];
+          count--;
+        }
+      }
+    }
+
+    return dst;
+  }
+
+  /**
+   * Estimate per-channel background illumination map (R, G, B) with ink suppression.
+   * Clamping ink pixels upward ensures handwritten text does not artificially pull down
+   * the local background estimate (eliminating halos around text).
+   */
+  estimateBackgroundRGB(rgba, w, h, radius) {
+    const totalPixels = w * h;
+    const rBuf = new Float32Array(totalPixels);
+    const gBuf = new Float32Array(totalPixels);
+    const bBuf = new Float32Array(totalPixels);
+
+    // Ink-suppression step: clamp very dark stroke pixels up to estimated paper baseline
+    for (let i = 0, p = 0; i < rgba.length; i += 4, p++) {
+      const r = rgba[i];
+      const g = rgba[i + 1];
+      const b = rgba[i + 2];
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+
+      // If ink (darker than typical paper), push up to ink-clamp floor
+      if (lum < 155) {
+        const floor = 175;
+        rBuf[p] = Math.max(r, floor);
+        gBuf[p] = Math.max(g, floor);
+        bBuf[p] = Math.max(b, floor);
+      } else {
+        rBuf[p] = r;
+        gBuf[p] = g;
+        bBuf[p] = b;
+      }
+    }
+
+    return {
+      rBg: this.boxBlurChannel(rBuf, w, h, radius),
+      gBg: this.boxBlurChannel(gBuf, w, h, radius),
+      bBg: this.boxBlurChannel(bBuf, w, h, radius)
+    };
+  }
+
+  /**
+   * Fast luminance background estimator
+   */
+  estimateBackgroundLuminance(rgba, w, h, radius) {
+    const totalPixels = w * h;
+    const lumBuf = new Float32Array(totalPixels);
+
+    for (let i = 0, p = 0; i < rgba.length; i += 4, p++) {
+      const lum = 0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2];
+      // Ink-suppressed luminance
+      lumBuf[p] = lum < 150 ? 175 : lum;
+    }
+
+    return this.boxBlurChannel(lumBuf, w, h, radius);
+  }
+
+  /**
+   * Flat-field illumination normalization using large-kernel background estimation.
+   * Completely eliminates desk shadows, light gradients, and paper yellowing.
+   */
+  flatFieldNormalize(rgba, w, h, radius, options = {}) {
+    const { rBg, gBg, bBg } = this.estimateBackgroundRGB(rgba, w, h, radius);
+    const whiteFloor = options.whiteFloor || 205;
+
+    for (let i = 0, p = 0; i < rgba.length; i += 4, p++) {
+      const r = rgba[i];
+      const g = rgba[i + 1];
+      const b = rgba[i + 2];
+
+      // Local background divisor (clamped to prevent division by zero / deep shadows)
+      const bgR = Math.max(45, rBg[p]);
+      const bgG = Math.max(45, gBg[p]);
+      const bgB = Math.max(45, bBg[p]);
+
+      // Von Kries chromatic adaptation & flat-field division
+      let nR = (r / bgR) * 255;
+      let nG = (g / bgG) * 255;
+      let nB = (b / bgB) * 255;
+
+      const lum = 0.299 * nR + 0.587 * nG + 0.114 * nB;
+      const chroma = Math.max(nR, nG, nB) - Math.min(nR, nG, nB);
+
+      // Lock paper to pure white while preserving ink chromaticity
+      if (lum >= whiteFloor && chroma < 35) {
+        const t = Math.min(1.0, (lum - whiteFloor) / (255 - whiteFloor) * 1.5);
+        nR = nR + (255 - nR) * t;
+        nG = nG + (255 - nG) * t;
+        nB = nB + (255 - nB) * t;
+      }
+
+      rgba[i]     = Math.min(255, Math.max(0, Math.round(nR)));
+      rgba[i + 1] = Math.min(255, Math.max(0, Math.round(nG)));
+      rgba[i + 2] = Math.min(255, Math.max(0, Math.round(nB)));
+    }
+  }
+
+  /**
+   * Intelligent color saturation boost for blue, black, red, and green pen inks
+   * while locking the background paper to pure #FFFFFF white.
+   */
+  enhanceInkColors(rgba, w, h, options = {}) {
+    for (let i = 0; i < rgba.length; i += 4) {
+      let r = rgba[i];
+      let g = rgba[i + 1];
+      let b = rgba[i + 2];
+
+      const maxVal = Math.max(r, g, b);
+      const minVal = Math.min(r, g, b);
+      const chroma = maxVal - minVal;
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+
+      // 1. PAPER LOCK: Snap near-white paper background to pure #FFFFFF
+      if (lum >= 210 && chroma < 32) {
+        rgba[i] = 255;
+        rgba[i + 1] = 255;
+        rgba[i + 2] = 255;
+        continue;
+      }
+
+      // 2. BLACK / DARK PENCIL INK: Deepen contrast and neutralize color cast
+      if (chroma < 24) {
+        // High contrast S-curve for rich jet black text
+        const curve = Math.pow(Math.min(1.0, lum / 195), 1.45);
+        let darkVal = Math.round(lum * curve);
+        // Neutralize faint yellow/purple cast in black ballpoint
+        rgba[i]     = Math.min(255, Math.max(0, darkVal));
+        rgba[i + 1] = Math.min(255, Math.max(0, darkVal));
+        rgba[i + 2] = Math.min(255, Math.max(0, darkVal));
+        continue;
+      }
+
+      // 3. COLORED INKS: Blue, Red, Green, etc.
+      // Calculate Hue angle (0 - 360)
+      let hue = 0;
+      if (maxVal === r) {
+        hue = ((g - b) / (chroma || 1)) % 6;
+      } else if (maxVal === g) {
+        hue = (b - r) / (chroma || 1) + 2;
+      } else {
+        hue = (r - g) / (chroma || 1) + 4;
+      }
+      hue = Math.round(hue * 60);
+      if (hue < 0) hue += 360;
+
+      // Pilot FriXion / Ballpoint Ink Enhancements:
+      if (hue >= 175 && hue <= 265) {
+        // BLUE INK: Boost blue vibrancy and deepen value
+        b = Math.min(255, Math.round(b * 1.15 + 15));
+        r = Math.round(r * 0.75);
+        g = Math.round(g * 0.85);
+      } else if (hue >= 335 || hue <= 25) {
+        // RED INK: Boost red pop and deepen value
+        r = Math.min(255, Math.round(r * 1.15 + 15));
+        g = Math.round(g * 0.72);
+        b = Math.round(b * 0.72);
+      } else if (hue >= 70 && hue <= 170) {
+        // GREEN INK: Boost green pop and deepen value
+        g = Math.min(255, Math.round(g * 1.15 + 12));
+        r = Math.round(r * 0.75);
+        b = Math.round(b * 0.78);
+      } else {
+        // OTHER INKS (Purple, Violet, Orange, Yellow): Boost saturation
+        const mid = (maxVal + minVal) / 2;
+        r = Math.round(mid + (r - mid) * 1.35);
+        g = Math.round(mid + (g - mid) * 1.35);
+        b = Math.round(mid + (b - mid) * 1.35);
+      }
+
+      rgba[i]     = Math.min(255, Math.max(0, r));
+      rgba[i + 1] = Math.min(255, Math.max(0, g));
+      rgba[i + 2] = Math.min(255, Math.max(0, b));
+    }
+  }
+
+  /**
+   * Unsharp mask filtering / Laplacian edge enhancement.
+   * Produces razor-sharp handwritten ink edges without adding noise to white paper.
+   */
+  unsharpMask(rgba, w, h, amount = 0.85, threshold = 228) {
+    const totalPixels = w * h;
+    const origR = new Uint8Array(totalPixels);
+    const origG = new Uint8Array(totalPixels);
+    const origB = new Uint8Array(totalPixels);
+
+    for (let i = 0, p = 0; i < rgba.length; i += 4, p++) {
+      origR[p] = rgba[i];
+      origG[p] = rgba[i + 1];
+      origB[p] = rgba[i + 2];
+    }
+
+    // 3x3 Laplacian / Unsharp Kernel applied selectively to ink strokes
+    for (let y = 1; y < h - 1; y++) {
+      const rowOffset = y * w;
+      for (let x = 1; x < w - 1; x++) {
+        const p = rowOffset + x;
+        const r = origR[p];
+        const g = origG[p];
+        const b = origB[p];
+        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+
+        // Skip pure white paper to prevent noise amplification
+        if (lum > threshold) continue;
+
+        // 4-neighbor average
+        const rSurround = (origR[p - 1] + origR[p + 1] + origR[p - w] + origR[p + w]) * 0.25;
+        const gSurround = (origG[p - 1] + origG[p + 1] + origG[p - w] + origG[p + w]) * 0.25;
+        const bSurround = (origB[p - 1] + origB[p + 1] + origB[p - w] + origB[p + w]) * 0.25;
+
+        // Edge detail difference
+        const rDiff = r - rSurround;
+        const gDiff = g - gSurround;
+        const bDiff = b - bSurround;
+
+        const outIdx = p * 4;
+        rgba[outIdx]     = Math.min(255, Math.max(0, Math.round(r + amount * rDiff)));
+        rgba[outIdx + 1] = Math.min(255, Math.max(0, Math.round(g + amount * gDiff)));
+        rgba[outIdx + 2] = Math.min(255, Math.max(0, Math.round(b + amount * bDiff)));
+      }
+    }
+  }
+
+  /**
+   * Enhanced B&W Adaptive Thresholding (Bradley-Roth Algorithm).
+   * Generates clean 1-bit high-contrast black & white scans for photocopy & OCR.
+   */
+  adaptiveThreshold(rgba, w, h, windowSize, sensitivity = 0.13) {
+    const bgMap = this.estimateBackgroundLuminance(rgba, w, h, windowSize);
+    const factor = 1.0 - sensitivity;
+
+    for (let i = 0, p = 0; i < rgba.length; i += 4, p++) {
+      const lum = 0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2];
+      const thresh = bgMap[p] * factor;
+      const val = lum < thresh ? 0 : 255;
+      rgba[i]     = val;
+      rgba[i + 1] = val;
+      rgba[i + 2] = val;
+    }
+  }
+
+  /**
+   * Enhanced Grayscale mode with background normalization and white paper lock.
+   */
+  normalizeGrayscale(rgba, w, h, radius) {
+    const bgMap = this.estimateBackgroundLuminance(rgba, w, h, radius);
+
+    for (let i = 0, p = 0; i < rgba.length; i += 4, p++) {
+      const lum = 0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2];
+      const factor = 255 / Math.max(45, bgMap[p]);
+      let normLum = lum * factor;
+
+      // Lock paper to pure white, apply smooth curve to graphite/ink midtones
+      if (normLum > 215) {
+        normLum = 255;
+      } else {
+        normLum = Math.pow(normLum / 215, 1.35) * 215;
+      }
+
+      const val = Math.min(255, Math.max(0, Math.round(normLum)));
+      rgba[i]     = val;
+      rgba[i + 1] = val;
+      rgba[i + 2] = val;
+    }
+  }
+
+  /**
+   * Apply Document Filters:
+   * - 'magic': Authentic Rocketbook Magic Ink (Flat-field normalization, color boost, white lock, unsharp mask)
+   * - 'bw': Clean high-contrast B&W adaptive thresholding
+   * - 'grayscale': Background-normalized smooth grayscale
+   * - 'color': Flat-field illumination normalized full color
+   * - 'original': Raw perspective warp
+   */
+  applyFilter(canvas, filterType = 'magic', options = {}) {
+    if (filterType === 'original') {
+      return canvas;
+    }
+
     const w = canvas.width;
     const h = canvas.height;
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     const imgData = ctx.getImageData(0, 0, w, h);
     const d = imgData.data;
 
-    if (filterType === 'original') {
-      return canvas;
-    }
+    const largeKernelRadius = Math.max(28, Math.round(Math.min(w, h) / 20));
 
     if (filterType === 'magic') {
-      // Rocketbook "Magic Color" Enhancement:
-      // Removes desk shadows, whitens paper background, amplifies dark ink, retains pen colors
-      const blurRadius = Math.max(15, Math.round(w / 40));
-      const bgMap = this.estimateBackgroundLuminance(d, w, h, blurRadius);
+      // 1. Flat-field normalization eliminates shadows and paper yellowing
+      this.flatFieldNormalize(d, w, h, largeKernelRadius);
 
-      for (let i = 0, p = 0; i < d.length; i += 4, p++) {
-        const r = d[i];
-        const g = d[i + 1];
-        const b = d[i + 2];
+      // 2. Intelligent color boost for blue, black, red, green inks & lock paper to #FFFFFF
+      this.enhanceInkColors(d, w, h);
 
-        const bg = bgMap[p]; // Local background brightness (0..255)
-        const factor = 255 / Math.max(40, bg);
+      // 3. Unsharp mask / Laplacian edge enhancement for razor-sharp handwriting
+      this.unsharpMask(d, w, h, 0.9, 228);
 
-        // Normalize each channel by local background illumination
-        let normR = r * factor;
-        let normG = g * factor;
-        let normB = b * factor;
-
-        // Dynamic S-curve contrast expansion: push light grays to pure white, deepen ink
-        const lum = 0.299 * normR + 0.587 * normG + 0.114 * normB;
-        if (lum > 200) {
-          // Flatten paper background to white
-          const t = (lum - 200) / 55;
-          normR = normR + (255 - normR) * t;
-          normG = normG + (255 - normG) * t;
-          normB = normB + (255 - normB) * t;
-        } else {
-          // Darken ink strokes
-          const boost = Math.pow(lum / 200, 1.4);
-          normR = normR * boost;
-          normG = normG * boost;
-          normB = normB * boost;
-        }
-
-        d[i]     = Math.min(255, Math.max(0, normR));
-        d[i + 1] = Math.min(255, Math.max(0, normG));
-        d[i + 2] = Math.min(255, Math.max(0, normB));
-      }
     } else if (filterType === 'bw') {
-      // Clean high-contrast B&W (Adaptive Thresholding)
+      // High-contrast adaptive thresholding
       const windowSize = Math.max(16, Math.round(w / 35));
-      const bgMap = this.estimateBackgroundLuminance(d, w, h, windowSize);
+      this.adaptiveThreshold(d, w, h, windowSize, 0.13);
 
-      for (let i = 0, p = 0; i < d.length; i += 4, p++) {
-        const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-        const thresh = bgMap[p] * 0.88; // 12% below local mean is ink
-        const val = lum < thresh ? 0 : 255;
-        d[i] = val;
-        d[i + 1] = val;
-        d[i + 2] = val;
-      }
     } else if (filterType === 'grayscale') {
-      // Grayscale with background normalization
-      const bgMap = this.estimateBackgroundLuminance(d, w, h, 20);
-      for (let i = 0, p = 0; i < d.length; i += 4, p++) {
-        const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-        const factor = 255 / Math.max(40, bgMap[p]);
-        let val = lum * factor;
-        val = val > 215 ? 255 : Math.pow(val / 215, 1.3) * 215;
-        d[i] = val;
-        d[i + 1] = val;
-        d[i + 2] = val;
-      }
+      // Smooth grayscale with shadow removal & pure white background
+      this.normalizeGrayscale(d, w, h, largeKernelRadius);
+
+    } else if (filterType === 'color') {
+      // Balanced flat-field color scan
+      this.flatFieldNormalize(d, w, h, largeKernelRadius);
+      this.unsharpMask(d, w, h, 0.6, 230);
     }
 
     ctx.putImageData(imgData, 0, 0);
     return canvas;
   }
-
-  // Fast box-blur background luminance estimator
-  estimateBackgroundLuminance(rgba, w, h, radius) {
-    const lum = new Float32Array(w * h);
-    for (let i = 0, p = 0; i < rgba.length; i += 4, p++) {
-      lum[p] = 0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2];
-    }
-
-    // Horizontal pass
-    const temp = new Float32Array(w * h);
-    for (let y = 0; y < h; y++) {
-      let sum = 0;
-      let count = 0;
-      const row = y * w;
-      for (let x = -radius; x <= radius; x++) {
-        if (x >= 0 && x < w) {
-          sum += lum[row + x];
-          count++;
-        }
-      }
-      for (let x = 0; x < w; x++) {
-        temp[row + x] = sum / (count || 1);
-        const nextX = x + radius + 1;
-        if (nextX < w) {
-          sum += lum[row + nextX];
-          count++;
-        }
-        const prevX = x - radius;
-        if (prevX >= 0) {
-          sum -= lum[row + prevX];
-          count--;
-        }
-      }
-    }
-
-    // Vertical pass
-    const result = new Float32Array(w * h);
-    for (let x = 0; x < w; x++) {
-      let sum = 0;
-      let count = 0;
-      for (let y = -radius; y <= radius; y++) {
-        if (y >= 0 && y < h) {
-          sum += temp[y * w + x];
-          count++;
-        }
-      }
-      for (let y = 0; y < h; y++) {
-        result[y * w + x] = sum / (count || 1);
-        const nextY = y + radius + 1;
-        if (nextY < h) {
-          sum += temp[nextY * w + x];
-          count++;
-        }
-        const prevY = y - radius;
-        if (prevY >= 0) {
-          sum -= temp[prevY * w + x];
-          count--;
-        }
-      }
-    }
-
-    return result;
-  }
 }
 
-window.VisionEngine = VisionEngine;
+// Attach to window object for web & Electron environments
+if (typeof window !== 'undefined') {
+  window.VisionEngine = VisionEngine;
+}
+
+// Export for Node.js test environments if applicable
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = VisionEngine;
+}

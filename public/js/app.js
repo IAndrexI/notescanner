@@ -74,16 +74,31 @@ async function loadConfigAndNetwork() {
       }
     }
 
+    const versionElem = document.getElementById('settings-app-version');
+    if (versionElem && cfg.version) {
+      versionElem.textContent = cfg.version;
+    }
+
     updateNetworkInfoUI();
     updateConnectionStatusUI();
     updateAutoSendUI();
     renderQuickDestinationPills();
 
-    // Preload libraries if authenticated
+    // Preload libraries if authenticated & auto-select if none chosen
     if (state.seafileConfig.hasToken && state.seafileConfig.serverUrl) {
       SeafileApi.getRepos().then(repos => {
         state.availableRepos = repos || [];
       }).catch(() => {});
+
+      if (!state.seafileConfig.repoId) {
+        SeafileApi.autoSelectRepo().then(res => {
+          if (res && res.repoId) {
+            state.seafileConfig.repoId = res.repoId;
+            state.seafileConfig.repoName = res.repoName;
+            updateConnectionStatusUI();
+          }
+        }).catch(() => {});
+      }
     }
   } catch (err) {
     console.warn('Initialization error:', err);
@@ -142,6 +157,8 @@ function updateConnectionStatusUI() {
 async function initCamera() {
   const video = document.getElementById('camera-feed');
   const overlay = document.getElementById('camera-overlay');
+  const fallbackCard = document.getElementById('camera-permission-fallback');
+  const directBtn = document.getElementById('btn-camera-direct');
   if (!video) return;
 
   cameraScanner = new CameraScanner(video, overlay);
@@ -151,9 +168,15 @@ async function initCamera() {
     if (torchBtn) {
       torchBtn.style.display = res.hasTorch ? 'flex' : 'none';
     }
+    if (fallbackCard) fallbackCard.style.display = 'none';
+    if (directBtn) {
+      directBtn.style.display = (CameraScanner.isIOS() || 'ontouchstart' in window) ? 'flex' : 'none';
+    }
   } catch (err) {
     console.warn('Camera could not start immediately:', err);
-    showToast('Camera access paused or unavailable. You can also import images from gallery.', 'info');
+    if (fallbackCard) fallbackCard.style.display = 'block';
+    if (directBtn) directBtn.style.display = 'flex';
+    showToast('Live camera paused or unavailable. Tap "Capture with Camera" for native photo shutter.', 'info');
   }
 }
 
@@ -175,6 +198,15 @@ function initUI() {
     document.getElementById('file-gallery-input')?.click();
   });
 
+  // Direct iOS / Mobile Camera Fallback
+  document.getElementById('btn-camera-direct')?.addEventListener('click', () => {
+    document.getElementById('file-camera-direct')?.click();
+  });
+  document.getElementById('btn-fallback-camera')?.addEventListener('click', () => {
+    document.getElementById('file-camera-direct')?.click();
+  });
+  document.getElementById('file-camera-direct')?.addEventListener('change', handleFileImport);
+
   // Crop / Corner editor controls
   document.getElementById('btn-crop-cancel')?.addEventListener('click', () => switchView('scanner'));
   document.getElementById('btn-crop-reset')?.addEventListener('click', handleResetCorners);
@@ -192,6 +224,36 @@ function initUI() {
   document.getElementById('btn-finish-doc')?.addEventListener('click', handleFinishDoc);
   document.getElementById('btn-filter-back')?.addEventListener('click', () => switchView('crop'));
 
+  // Multi-format Export Dropdown on Review Screen
+  const exportDropdownBtn = document.getElementById('btn-export-dropdown');
+  const exportDropdownMenu = document.getElementById('export-dropdown-menu');
+  if (exportDropdownBtn && exportDropdownMenu) {
+    exportDropdownBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      exportDropdownMenu.classList.toggle('show');
+    });
+
+    document.querySelectorAll('#export-dropdown-menu .dropdown-item').forEach(item => {
+      item.addEventListener('click', (e) => {
+        exportDropdownMenu.classList.remove('show');
+        const format = e.currentTarget.dataset.export;
+        if (format === 'share') {
+          handleWebShareCurrentDocument();
+        } else if (format === 'qr') {
+          handleOpenQrShareForCurrent();
+        } else {
+          handleDownloadExport(format);
+        }
+      });
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!exportDropdownBtn.contains(e.target)) {
+        exportDropdownMenu.classList.remove('show');
+      }
+    });
+  }
+
   // Quick-Send Auto-Send Toggle
   document.getElementById('review-auto-send-toggle')?.addEventListener('change', handleToggleAutoSend);
 
@@ -199,6 +261,19 @@ function initUI() {
   document.getElementById('btn-cancel-save')?.addEventListener('click', closeSaveDocModal);
   document.getElementById('btn-upload-seafile')?.addEventListener('click', handleUploadToSeafile);
   document.getElementById('btn-download-pdf')?.addEventListener('click', handleDownloadLocalPdf);
+  document.getElementById('btn-share-modal')?.addEventListener('click', () => {
+    const fmt = document.getElementById('save-format-select')?.value || 'pdf';
+    handleWebShareCurrentDocument(fmt);
+  });
+  document.getElementById('btn-qr-share-modal')?.addEventListener('click', () => {
+    handleOpenQrShareForCurrent();
+  });
+
+  // Direct QR Code Share Modal Controls
+  document.getElementById('btn-close-qr-share')?.addEventListener('click', closeQrShareModal);
+  document.getElementById('btn-done-qr-share')?.addEventListener('click', closeQrShareModal);
+  document.getElementById('btn-copy-share-url')?.addEventListener('click', handleCopyQrShareUrl);
+  document.getElementById('btn-open-share-url')?.addEventListener('click', handleOpenQrShareUrl);
 
   // Settings modal
   document.getElementById('btn-close-settings')?.addEventListener('click', closeSettingsModal);
@@ -215,6 +290,25 @@ function initUI() {
       }
     });
   });
+
+  // Apple / iOS Safari Touch Optimization (prevent double-tap zoom delay & unwanted gesture zoom)
+  let lastTouchEnd = 0;
+  document.addEventListener('touchend', (e) => {
+    const now = Date.now();
+    if (now - lastTouchEnd <= 300) {
+      if (!['INPUT', 'TEXTAREA', 'SELECT', 'OPTION'].includes(e.target.tagName)) {
+        e.preventDefault();
+      }
+    }
+    lastTouchEnd = now;
+  }, { passive: false });
+
+  document.addEventListener('gesturestart', (e) => {
+    e.preventDefault();
+  }, { passive: false });
+
+  // Initialize iOS Add to Home Screen Banner
+  initIosA2hs();
 
   // Setup interactive drag on crop canvas
   setupCropCanvasInteractions();
@@ -757,26 +851,275 @@ async function handleQuickSend(preset) {
   }
 }
 
-async function handleDownloadLocalPdf() {
+async function handleDownloadExport(format = 'pdf', options = {}) {
   try {
-    showLoading('Building PDF document...');
+    const fmt = format.toUpperCase();
+    showLoading(`Exporting document as ${fmt}...`);
     const title = (document.getElementById('save-doc-title')?.value || 'Scanned_Notes').trim();
-    const pdfBlob = await PdfBuilder.createPdfFromPages(state.pages);
 
-    const url = URL.createObjectURL(pdfBlob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${title}.pdf`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    // Ensure active page is included if state.pages is empty
+    let pagesToExport = [...state.pages];
+    if (state.activePageCanvas && pagesToExport.length === 0) {
+      pagesToExport.push({
+        id: Date.now(),
+        canvas: state.activePageCanvas,
+        filter: state.activeFilter
+      });
+    }
+
+    if (pagesToExport.length === 0) {
+      hideLoading();
+      showToast('No pages available to export', 'warning');
+      return;
+    }
+
+    const result = await ExportManager.downloadDocument(pagesToExport, format, {
+      title,
+      pageSize: options.pageSize || 'a4',
+      orientation: options.orientation || 'auto',
+      quality: options.quality || 0.90,
+      ...options
+    });
 
     hideLoading();
-    showToast('PDF downloaded successfully!', 'success');
+    showToast(`Exported ${result.filename} successfully!`, 'success');
+    return result;
   } catch (err) {
     hideLoading();
-    showToast('Failed to generate PDF: ' + err.message, 'error');
+    showToast(`Failed to export ${format}: ${err.message}`, 'error');
+    console.error('Export error:', err);
+  }
+}
+
+async function handleDownloadLocalPdf() {
+  const fmt = document.getElementById('save-format-select')?.value || 'pdf';
+  return handleDownloadExport(fmt);
+}
+window.handleDownloadExport = handleDownloadExport;
+
+// -------------------------------------------------------------
+// Direct Sharing to People & Devices (Web Share API & QR Code)
+// -------------------------------------------------------------
+async function handleWebShareCurrentDocument(format = 'pdf') {
+  try {
+    if (state.activePageCanvas) {
+      state.pages.push({
+        id: Date.now(),
+        canvas: state.activePageCanvas,
+        filter: state.activeFilter
+      });
+      state.activePageCanvas = null;
+      updatePageBadge();
+    }
+
+    if (state.pages.length === 0) {
+      showToast('Please scan at least one page first.', 'info');
+      return;
+    }
+
+    const title = (document.getElementById('save-doc-title')?.value || 'Scanned_Notes').trim();
+    showLoading(`Preparing ${format.toUpperCase()} for sharing...`);
+
+    const result = await ExportManager.exportDocument(state.pages, format, { title });
+    hideLoading();
+
+    const file = new File([result.blob], result.filename, { type: result.mimeType });
+
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({
+        title: title,
+        text: `Scanned note: ${title}`,
+        files: [file]
+      });
+      showToast('Shared successfully!', 'success');
+      return;
+    }
+
+    if (navigator.share) {
+      await navigator.share({
+        title: title,
+        text: `RocketScan: ${title}`
+      });
+      showToast('Shared via system share!', 'success');
+      return;
+    }
+
+    // Fallback: Open QR share modal
+    openQrShareModal({
+      title: result.filename,
+      info: 'AirDrop / Web Share file sharing is not supported in this browser. Use QR code or download directly.'
+    });
+  } catch (err) {
+    hideLoading();
+    if (err.name !== 'AbortError') {
+      showToast('Share failed: ' + err.message, 'error');
+    }
+  }
+}
+
+async function handleOpenQrShareForCurrent() {
+  try {
+    showLoading('Generating QR Share code...');
+    const title = (document.getElementById('save-doc-title')?.value || 'Scanned_Notes').trim();
+
+    let shareUrl = '';
+    try {
+      const net = await SeafileApi.getNetworkInfo();
+      shareUrl = net.connectUrl || window.location.href;
+    } catch (e) {
+      shareUrl = window.location.href;
+    }
+
+    hideLoading();
+    openQrShareModal({
+      title,
+      url: shareUrl,
+      info: `Scan this QR code with any smartphone or tablet to download or view "${title}".`
+    });
+  } catch (e) {
+    hideLoading();
+    showToast('Could not generate QR share code: ' + e.message, 'error');
+  }
+}
+
+async function openQrShareModal(options = {}) {
+  const modal = document.getElementById('modal-qr-share');
+  const canvas = document.getElementById('qr-share-canvas');
+  const img = document.getElementById('qr-share-image');
+  const urlInput = document.getElementById('qr-share-url-input');
+  const infoText = document.getElementById('qr-share-info-text');
+  if (!modal) return;
+
+  const url = options.url || window.location.href;
+  const title = options.title || 'Document';
+
+  if (urlInput) urlInput.value = url;
+  if (infoText) infoText.textContent = options.info || `Direct share link for "${title}". Scan with any camera to open immediately.`;
+
+  // Render QR code onto canvas using bundled QRCodeLib
+  try {
+    if (window.QRCodeLib && window.QRCodeLib.toCanvas && canvas) {
+      canvas.style.display = 'block';
+      if (img) img.style.display = 'none';
+      await window.QRCodeLib.toCanvas(canvas, url, {
+        width: 240,
+        margin: 1,
+        color: {
+          dark: '#0f172a',
+          light: '#ffffff'
+        }
+      });
+    } else if (img) {
+      const res = await fetch(`/api/qrcode?text=${encodeURIComponent(url)}`);
+      const data = await res.json();
+      img.src = data.qrCode;
+      img.style.display = 'block';
+      if (canvas) canvas.style.display = 'none';
+    }
+  } catch (err) {
+    console.warn('[QR Share] Render error:', err);
+  }
+
+  modal.classList.add('active');
+}
+
+function closeQrShareModal() {
+  const modal = document.getElementById('modal-qr-share');
+  if (modal) modal.classList.remove('active');
+}
+
+async function handleCopyQrShareUrl() {
+  const urlInput = document.getElementById('qr-share-url-input');
+  if (!urlInput || !urlInput.value) return;
+
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(urlInput.value);
+    } else {
+      urlInput.select();
+      document.execCommand('copy');
+    }
+    showToast('✓ Share link copied to clipboard!', 'success');
+  } catch (err) {
+    showToast('Could not copy link: ' + err.message, 'error');
+  }
+}
+
+function handleOpenQrShareUrl() {
+  const urlInput = document.getElementById('qr-share-url-input');
+  if (urlInput && urlInput.value) {
+    window.open(urlInput.value, '_blank');
+  }
+}
+
+function initIosA2hs() {
+  const isIOS = CameraScanner.isIOS();
+  const isStandalone = Boolean(window.navigator.standalone) || window.matchMedia('(display-mode: standalone)').matches;
+  const dismissed = localStorage.getItem('notescan_a2hs_dismissed') === 'true';
+
+  const banner = document.getElementById('ios-a2hs-banner');
+  if (!banner) return;
+
+  if (isIOS && !isStandalone && !dismissed) {
+    setTimeout(() => {
+      banner.style.display = 'block';
+    }, 2500);
+  }
+
+  document.getElementById('btn-close-a2hs')?.addEventListener('click', () => {
+    banner.style.display = 'none';
+    localStorage.setItem('notescan_a2hs_dismissed', 'true');
+  });
+}
+
+async function handleQrShareNote(file) {
+  try {
+    showLoading('Generating QR Code for Seafile note...');
+    let link = '';
+    try {
+      const shareRes = await SeafileApi.createShareLink(state.seafileConfig.repoId, file.fullPath);
+      link = shareRes.shareUrl || shareRes.link;
+    } catch (e) {
+      link = await SeafileApi.getFileUrl(state.seafileConfig.repoId, file.fullPath);
+    }
+    hideLoading();
+
+    openQrShareModal({
+      title: file.name,
+      url: link,
+      info: `Scan to download "${file.name}" directly from Seafile to your phone.`
+    });
+  } catch (err) {
+    hideLoading();
+    showToast('Failed to generate note QR: ' + err.message, 'error');
+  }
+}
+
+async function handleWebShareNote(file) {
+  try {
+    showLoading('Preparing note link for sharing...');
+    let link = '';
+    try {
+      const shareRes = await SeafileApi.createShareLink(state.seafileConfig.repoId, file.fullPath);
+      link = shareRes.shareUrl || shareRes.link;
+    } catch (e) {
+      link = await SeafileApi.getFileUrl(state.seafileConfig.repoId, file.fullPath);
+    }
+    hideLoading();
+
+    if (navigator.share) {
+      await navigator.share({
+        title: file.name,
+        text: `NoteScan Document: ${file.name}`,
+        url: link
+      });
+      showToast('Shared successfully!', 'success');
+    }
+  } catch (err) {
+    hideLoading();
+    if (err.name !== 'AbortError') {
+      showToast('Share failed: ' + err.message, 'error');
+    }
   }
 }
 
@@ -838,19 +1181,27 @@ async function handleUploadToSeafile() {
     const cleanPath = cleanFolder ? `${cleanFolder}/${fileName}` : fileName;
     const viewUrl = uploadRes.viewUrl || (state.seafileConfig.serverUrl ? `${state.seafileConfig.serverUrl.replace(/\/+$/, '')}/#common/lib/${targetRepoId}/${encodeURIComponent(cleanPath)}` : '');
 
-    // Immediate visual feedback toast with link/button to view in Seafile
+    // Immediate visual feedback toast with link/button to view in Seafile & Share link
     showToast(`✓ Uploaded "${fileName}" to Seafile!`, 'success', {
-      label: '👁️ View in Seafile',
+      label: '🔗 Get Share Link',
       onClick: async () => {
         try {
-          const directUrl = await SeafileApi.getFileUrl(targetRepoId, `/${cleanPath}`);
-          if (directUrl) {
-            window.open(directUrl, '_blank');
-            return;
+          showLoading('Generating Seafile public share link...');
+          const share = await SeafileApi.createShareLink(targetRepoId, `/${cleanPath}`);
+          hideLoading();
+          const shareUrl = share.shareUrl || share.link;
+          if (shareUrl) {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              await navigator.clipboard.writeText(shareUrl).catch(() => {});
+            }
+            showToast(`📋 Public link copied: ${shareUrl}`, 'success', {
+              label: '🌐 Open URL',
+              onClick: () => window.open(shareUrl, '_blank')
+            });
           }
-        } catch (e) {}
-        if (viewUrl) {
-          window.open(viewUrl, '_blank');
+        } catch (e) {
+          hideLoading();
+          showToast('Failed to create share link: ' + e.message, 'error');
         }
       }
     });
@@ -908,13 +1259,26 @@ async function loadSeafileGallery() {
           <div class="note-card-meta">${dateStr} • ${sizeStr}</div>
         </div>
         <div class="note-card-actions">
-          <button class="btn-icon" data-path="${file.fullPath}" title="View / Download">
+          <button class="btn-icon btn-open-note" data-path="${file.fullPath}" title="View / Download">
             👁️ Open
           </button>
+          <button class="btn-icon btn-share-note" data-path="${file.fullPath}" title="Generate & Copy Public Share Link">
+            🔗 Link
+          </button>
+          <button class="btn-icon btn-qr-note" data-path="${file.fullPath}" title="Scan QR Code to Download on Phone">
+            📲 QR
+          </button>
+          ${navigator.share ? `
+          <button class="btn-icon btn-webshare-note" data-path="${file.fullPath}" title="Share via AirDrop, WhatsApp, Slack">
+            📤 Share
+          </button>` : ''}
         </div>
       `;
 
-      card.querySelector('button')?.addEventListener('click', () => openSeafileDocument(file));
+      card.querySelector('.btn-open-note')?.addEventListener('click', () => openSeafileDocument(file));
+      card.querySelector('.btn-share-note')?.addEventListener('click', () => shareSeafileDocument(file));
+      card.querySelector('.btn-qr-note')?.addEventListener('click', () => handleQrShareNote(file));
+      card.querySelector('.btn-webshare-note')?.addEventListener('click', () => handleWebShareNote(file));
       grid.appendChild(card);
     });
   } catch (err) {
@@ -937,6 +1301,63 @@ async function openSeafileDocument(file) {
   } catch (err) {
     hideLoading();
     showToast('Failed to open file: ' + err.message, 'error');
+  }
+}
+
+async function shareSeafileDocument(file) {
+  try {
+    showLoading('Generating Seafile public share link...');
+    const result = await SeafileApi.createShareLink(state.seafileConfig.repoId, file.fullPath);
+    hideLoading();
+
+    const link = result.shareUrl || result.link || result.shared_link;
+    if (link) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(link).catch(() => {});
+      }
+      showToast(`✓ Public share link copied to clipboard!`, 'success', {
+        label: '🌐 Open URL',
+        onClick: () => window.open(link, '_blank')
+      });
+    } else {
+      showToast('Could not generate share link.', 'warning');
+    }
+  } catch (err) {
+    hideLoading();
+    showToast('Failed to generate share link: ' + err.message, 'error');
+  }
+}
+
+// Health check function for Settings modal
+async function runSeafileHealthCheck() {
+  const detailsBox = document.getElementById('seafile-health-details');
+  if (!detailsBox) return;
+
+  detailsBox.style.display = 'block';
+  detailsBox.className = 'health-status-box';
+  detailsBox.innerHTML = 'Connecting to Seafile server to test latency & health...';
+
+  try {
+    const health = await SeafileApi.checkHealth();
+    if (health.healthy) {
+      detailsBox.className = 'health-status-box healthy';
+      detailsBox.innerHTML = `
+        <strong>✓ Healthy Seafile Connection</strong><br>
+        <span>Latency: <strong>${health.latencyMs}ms</strong></span> • 
+        <span>User: <strong>${health.account?.email || health.account?.name || 'Authenticated'}</strong></span><br>
+        <span>Active Library: <strong>${health.activeRepoName || health.libraryInfo?.activeRepoName || 'Auto-selected'}</strong> (${health.libraryInfo?.totalLibraries || 0} total)</span>
+      `;
+    } else {
+      detailsBox.className = 'health-status-box unhealthy';
+      detailsBox.innerHTML = `
+        <strong>⚠️ Connection Issue</strong><br>
+        <span>Status: ${health.status || 'Unhealthy'}</span><br>
+        <span class="text-xs">${health.error || health.message || 'Check URL and token.'}</span>
+      `;
+    }
+  } catch (err) {
+    detailsBox.className = 'health-status-box unhealthy';
+    detailsBox.innerHTML = `<strong>Error checking health:</strong> ${err.message}`;
   }
 }
 

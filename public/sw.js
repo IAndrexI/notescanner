@@ -1,4 +1,4 @@
-const CACHE_NAME = 'rocketscan-v1';
+const CACHE_NAME = 'rocketscan-v3';
 const ASSETS = [
   '/',
   '/index.html',
@@ -7,10 +7,14 @@ const ASSETS = [
   '/js/app.js',
   '/js/vision.js',
   '/js/scanner.js',
+  '/js/export-manager.js',
   '/js/pdf-builder.js',
   '/js/seafile-api.js',
   '/js/storage.js',
-  '/js/jspdf.umd.min.js'
+  '/js/updater.js',
+  '/js/jspdf.umd.min.js',
+  '/js/jszip.min.js',
+  '/js/qrcode.min.js'
 ];
 
 self.addEventListener('install', (e) => {

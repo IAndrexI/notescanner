@@ -1,9 +1,13 @@
 /**
- * PdfBuilder: Assembles multiple scanned pages into a standard PDF or image files.
+ * PdfBuilder: Legacy & Modern Bridge for Multi-Page PDF Generation.
+ * Powered by ExportManager for A4/Letter compression and multi-format support.
  */
 class PdfBuilder {
   // Convert a canvas to a Blob
   static canvasToBlob(canvas, mimeType = 'image/jpeg', quality = 0.92) {
+    if (typeof ExportManager !== 'undefined') {
+      return ExportManager.canvasToBlob(canvas, mimeType, quality);
+    }
     return new Promise((resolve) => {
       canvas.toBlob(resolve, mimeType, quality);
     });
@@ -11,11 +15,15 @@ class PdfBuilder {
 
   // Generate a multi-page PDF document
   static async createPdfFromPages(pages, options = {}) {
+    if (typeof ExportManager !== 'undefined') {
+      const res = await ExportManager.createPdf(pages, options);
+      return res.blob;
+    }
+
     if (!pages || pages.length === 0) {
       throw new Error('No pages provided for PDF creation');
     }
 
-    // Ensure jsPDF is loaded
     const { jsPDF } = window.jspdf || {};
     if (!jsPDF) {
       throw new Error('jsPDF library is not loaded');
@@ -39,7 +47,6 @@ class PdfBuilder {
       const canvas = pages[i].canvas;
       const imgData = canvas.toDataURL('image/jpeg', 0.90);
 
-      // Fit image into A4 page while preserving aspect ratio
       const imgAspect = canvas.width / canvas.height;
       const pageAspect = pageWidth / pageHeight;
 
@@ -49,12 +56,10 @@ class PdfBuilder {
       let posY = 0;
 
       if (imgAspect > pageAspect) {
-        // Image is wider than A4
         renderW = pageWidth;
         renderH = pageWidth / imgAspect;
         posY = (pageHeight - renderH) / 2;
       } else {
-        // Image is taller than A4
         renderH = pageHeight;
         renderW = pageHeight * imgAspect;
         posX = (pageWidth - renderW) / 2;
@@ -63,9 +68,14 @@ class PdfBuilder {
       doc.addImage(imgData, 'JPEG', posX, posY, renderW, renderH, undefined, 'FAST');
     }
 
-    const pdfBlob = doc.output('blob');
-    return pdfBlob;
+    return doc.output('blob');
   }
 }
 
-window.PdfBuilder = PdfBuilder;
+if (typeof window !== 'undefined') {
+  window.PdfBuilder = PdfBuilder;
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = PdfBuilder;
+}

@@ -34,6 +34,11 @@ body, html {
   color: var(--text-main);
   overflow: hidden;
   user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: none;
+  overscroll-behavior-y: none;
 }
 
 .app-container {
@@ -1115,3 +1120,515 @@ body, html {
     border-bottom: 1px solid var(--border-color);
   }
 }
+
+/* ========================================================
+   Note Card Actions & Share Button
+   ======================================================== */
+.note-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+.note-card-actions .btn-icon {
+  padding: 0.35rem 0.6rem;
+  font-size: 0.8rem;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.note-card-actions .btn-icon:hover {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+/* ========================================================
+   In-App Updater & Health Check Styles
+   ======================================================== */
+.updater-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(8px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.updater-dialog {
+  background: #111827;
+  border: 1px solid #374151;
+  border-radius: 16px;
+  box-shadow: 0 20px 40px rgba(0,0,0,0.6), 0 0 0 1px rgba(56, 189, 248, 0.2);
+  width: 100%;
+  max-width: 480px;
+  overflow: hidden;
+  animation: modalPop 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.updater-header {
+  padding: 1.25rem 1.25rem 0.75rem;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  border-bottom: 1px solid #1f2937;
+}
+
+.updater-header-title {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.updater-sparkle {
+  font-size: 1.75rem;
+}
+
+.updater-header h3 {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: #f9fafb;
+}
+
+.updater-version-tag {
+  font-size: 0.82rem;
+  color: #38bdf8;
+  font-weight: 500;
+}
+
+.updater-close-btn {
+  background: transparent;
+  border: none;
+  color: #9ca3af;
+  font-size: 1.5rem;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 0.25rem;
+}
+
+.updater-close-btn:hover {
+  color: #ffffff;
+}
+
+.updater-body {
+  padding: 1.25rem;
+}
+
+.updater-version-pills {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.version-pill {
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.3rem 0.65rem;
+  border-radius: 999px;
+}
+
+.version-pill.current {
+  background: rgba(148, 163, 184, 0.15);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.version-pill.latest {
+  background: rgba(37, 99, 235, 0.2);
+  color: #60a5fa;
+  border: 1px solid rgba(37, 99, 235, 0.4);
+}
+
+.version-arrow {
+  color: #6b7280;
+  font-size: 0.85rem;
+}
+
+.updater-release-box {
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  padding: 0.85rem;
+  max-height: 140px;
+  overflow-y: auto;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: #cbd5e1;
+}
+
+.updater-release-header {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #94a3b8;
+  margin-bottom: 0.35rem;
+  letter-spacing: 0.05em;
+}
+
+.updater-options-notice {
+  margin-top: 1rem;
+  font-size: 0.78rem;
+  color: #94a3b8;
+  text-align: center;
+}
+
+.updater-actions {
+  padding: 1rem 1.25rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  background: #0b1120;
+  border-top: 1px solid #1f2937;
+}
+
+.updater-btn-apk {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 0.85rem 1.25rem;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  color: #ffffff;
+  text-decoration: none;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.4);
+  transition: all 0.15s ease;
+}
+
+.updater-btn-apk:hover {
+  background: linear-gradient(135deg, #1d4ed8, #1e40af);
+  transform: translateY(-1px);
+}
+
+.btn-text-group {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+}
+
+.btn-primary-text {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.btn-subtext {
+  font-size: 0.7rem;
+  opacity: 0.85;
+}
+
+.updater-secondary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.updater-btn-reload {
+  flex: 1;
+}
+
+.updater-btn-later {
+  padding: 0.6rem 1rem;
+  color: #94a3b8;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.updater-btn-later:hover {
+  color: #ffffff;
+}
+
+.updater-header-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.25);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  color: #38bdf8;
+  cursor: pointer;
+  margin-left: 0.5rem;
+  animation: pulse 2s infinite;
+}
+
+.pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #38bdf8;
+  box-shadow: 0 0 8px #38bdf8;
+}
+
+.health-status-box {
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  padding: 0.65rem 0.85rem;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.health-status-box.healthy {
+  border-color: rgba(16, 185, 129, 0.4);
+  background: rgba(16, 185, 129, 0.08);
+  color: #a7f3d0;
+}
+
+.health-status-box.unhealthy {
+  border-color: rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.08);
+  color: #fca5a5;
+}
+
+/* ========================================================
+   iOS Safari Optimization & Add to Home Screen (A2HS) Card
+   ======================================================== */
+.ios-a2hs-banner {
+  position: fixed;
+  bottom: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 92%;
+  max-width: 480px;
+  background: rgba(15, 23, 42, 0.96);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  border-radius: 16px;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.7);
+  z-index: 1000;
+  padding: 0.85rem 1rem;
+  animation: slideUpA2HS 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes slideUpA2HS {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 25px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.ios-a2hs-content {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.ios-a2hs-icon {
+  font-size: 1.8rem;
+  flex-shrink: 0;
+}
+
+.ios-a2hs-text {
+  flex: 1;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  color: #cbd5e1;
+}
+
+.ios-a2hs-text strong {
+  display: block;
+  color: #f8fafc;
+  font-size: 0.9rem;
+  margin-bottom: 0.2rem;
+}
+
+.ios-share-svg {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  vertical-align: -2px;
+  stroke: #38bdf8;
+}
+
+.ios-a2hs-close {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  font-size: 1.3rem;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  line-height: 1;
+}
+
+.ios-a2hs-close:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* Camera Direct Fallback & Permission Card */
+.camera-fallback-card {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  padding: 1.5rem;
+  text-align: center;
+  max-width: 320px;
+  width: 90%;
+  z-index: 20;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.6);
+}
+
+.camera-fallback-card h3 {
+  font-size: 1.1rem;
+  margin-bottom: 0.5rem;
+  color: #f8fafc;
+}
+
+.camera-fallback-card p {
+  font-size: 0.85rem;
+  color: #94a3b8;
+  margin-bottom: 1.25rem;
+}
+
+/* ========================================================
+   Multi-Format Export Dropdown & Share Split Buttons
+   ======================================================== */
+.export-split-btn {
+  display: inline-flex;
+  gap: 0.4rem;
+}
+
+.export-dropdown-container {
+  position: relative;
+  display: inline-block;
+}
+
+.dropdown-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  margin-bottom: 0.5rem;
+  background: #151d2e;
+  border: 1px solid #2e384d;
+  border-radius: 12px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.6);
+  min-width: 250px;
+  padding: 0.4rem 0;
+  z-index: 100;
+  display: none;
+}
+
+.dropdown-menu.show {
+  display: block;
+}
+
+.dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.6rem 1rem;
+  background: none;
+  border: none;
+  color: #cbd5e1;
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.dropdown-item:hover {
+  background: #1e293b;
+  color: #f8fafc;
+}
+
+.dropdown-item-icon {
+  font-size: 1.1rem;
+}
+
+.dropdown-divider {
+  border: 0;
+  border-top: 1px solid #2e384d;
+  margin: 0.4rem 0;
+}
+
+.modal-footer-wrap {
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* ========================================================
+   QR Code Direct File Share Modal
+   ======================================================== */
+.qr-share-dialog {
+  max-width: 420px;
+}
+
+.qr-share-box {
+  background: #ffffff;
+  padding: 1rem;
+  border-radius: 12px;
+  display: inline-block;
+  margin: 1rem auto;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.qr-share-box canvas,
+.qr-share-img {
+  display: block;
+  max-width: 240px;
+  max-height: 240px;
+  width: 240px;
+  height: 240px;
+}
+
+.share-url-container {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.share-url-container input {
+  flex: 1;
+}
+
+.btn-icon-sm {
+  font-size: 0.75rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #cbd5e1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  transition: all 0.15s ease;
+}
+
+.btn-icon-sm:hover {
+  background: rgba(37, 99, 235, 0.3);
+  border-color: #38bdf8;
+  color: #ffffff;
+}
+
+.note-card-actions {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+

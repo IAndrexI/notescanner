@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>NoteScan • Seafile Scanner & PC Viewer</title>
   <link rel="manifest" href="/manifest.json">
   <meta name="theme-color" content="#0f172a">
@@ -54,13 +54,22 @@
       <!-- View 1: Real-time Camera Scanner -->
       <section id="view-scanner" class="view-screen active">
         <div class="scanner-viewport">
-          <video id="camera-feed" playsinline autoplay muted></video>
+          <video id="camera-feed" playsinline webkit-playsinline autoplay muted></video>
           <canvas id="camera-overlay"></canvas>
 
           <div class="scanner-hud-top">
             <div id="scanner-page-badge" class="page-badge" style="display: none;">
               <span id="scanner-page-count">0</span> pages scanned
             </div>
+          </div>
+
+          <!-- Fallback Card for Camera Permissions or Direct Shutter -->
+          <div id="camera-permission-fallback" class="camera-fallback-card" style="display: none;">
+            <h3>📷 Native Camera Ready</h3>
+            <p>Live stream paused or restricted. Tap below to capture directly with your device camera:</p>
+            <button id="btn-fallback-camera" class="btn btn-primary">
+              <span>📸 Capture with Camera</span>
+            </button>
           </div>
 
           <div class="scanner-hud-bottom">
@@ -76,6 +85,14 @@
 
               <button id="btn-capture" class="shutter-button" title="Capture Page">
                 <div class="shutter-inner"></div>
+              </button>
+
+              <button id="btn-camera-direct" class="hud-circle-btn" title="iOS Native Camera HD Shutter (Full Resolution)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                  <circle cx="12" cy="13" r="4"/>
+                </svg>
+                <input type="file" id="file-camera-direct" accept="image/*" capture="environment" style="display: none;">
               </button>
 
               <button id="btn-torch" class="hud-circle-btn" title="Toggle Flash" style="display: none;">
@@ -165,6 +182,38 @@
           <button id="btn-add-page" class="btn btn-secondary">
             <span>➕ Add Page</span>
           </button>
+
+          <!-- Multi-format Export & Direct Sharing Dropdown -->
+          <div class="export-dropdown-container">
+            <button id="btn-export-dropdown" class="btn btn-secondary dropdown-toggle" title="Multi-Format Export & Sharing">
+              <span>📤 Export</span> ▾
+            </button>
+            <div id="export-dropdown-menu" class="dropdown-menu">
+              <button class="dropdown-item" data-export="pdf">
+                <span class="dropdown-item-icon">📄</span> PDF Document (A4/Letter)
+              </button>
+              <button class="dropdown-item" data-export="jpeg">
+                <span class="dropdown-item-icon">🖼️</span> High-Res JPEG
+              </button>
+              <button class="dropdown-item" data-export="png">
+                <span class="dropdown-item-icon">✨</span> Lossless PNG
+              </button>
+              <button class="dropdown-item" data-export="webp">
+                <span class="dropdown-item-icon">🌐</span> Modern WebP
+              </button>
+              <button class="dropdown-item" data-export="zip">
+                <span class="dropdown-item-icon">📦</span> ZIP Bundle (Pages + PDF)
+              </button>
+              <hr class="dropdown-divider">
+              <button class="dropdown-item" data-export="share">
+                <span class="dropdown-item-icon">📱</span> Share via AirDrop / Apps
+              </button>
+              <button class="dropdown-item" data-export="qr">
+                <span class="dropdown-item-icon">📲</span> QR Code Direct Share
+              </button>
+            </div>
+          </div>
+
           <button id="btn-finish-doc" class="btn btn-primary">
             <span id="btn-finish-doc-text">Save & Seafile Backup</span> →
           </button>
@@ -250,10 +299,19 @@
               <span>Target Library:</span>
               <strong id="save-repo-display">Default Library</strong>
             </div>
-            <div class="summary-item">
-              <span>Format:</span>
-              <strong>Searchable PDF (A4)</strong>
-            </div>
+          </div>
+
+          <!-- Multi-format Selection -->
+          <div class="form-group mt-3">
+            <label for="save-format-select">Export Format</label>
+            <select id="save-format-select" class="form-control">
+              <option value="pdf">📄 PDF Document (A4 / Letter with compression)</option>
+              <option value="jpeg">🖼️ High-Res JPEG Image</option>
+              <option value="png">✨ Lossless PNG Image</option>
+              <option value="webp">🌐 Modern WebP Image</option>
+              <option value="zip">📦 Full ZIP Archive (Pages + PDF + Summary)</option>
+              <option value="markdown">📝 Markdown Summary</option>
+            </select>
           </div>
 
           <div class="form-group mt-3">
@@ -261,9 +319,15 @@
             <div id="modal-quick-dest-pills" class="quick-dest-pills"></div>
           </div>
         </div>
-        <div class="modal-footer">
+        <div class="modal-footer modal-footer-wrap">
+          <button id="btn-share-modal" class="btn btn-secondary" title="Share via AirDrop, WhatsApp, Slack">
+            📤 Share / AirDrop
+          </button>
+          <button id="btn-qr-share-modal" class="btn btn-secondary" title="Instant QR Code for Nearby Phones">
+            📲 QR Share
+          </button>
           <button id="btn-download-pdf" class="btn btn-secondary">
-            💾 Download Local PDF
+            💾 Download Local
           </button>
           <button id="btn-upload-seafile" class="btn btn-primary">
             ☁️ Upload to Seafile
@@ -311,11 +375,15 @@
             </div>
           </details>
 
-          <div class="mt-3">
+          <div class="mt-3 d-flex gap-2">
             <button id="btn-test-connection" class="btn btn-secondary btn-sm">
               🔌 Test Connection
             </button>
+            <button type="button" id="btn-health-check" class="btn btn-ghost btn-sm" onclick="runSeafileHealthCheck()">
+              ❤️ Health Check
+            </button>
           </div>
+          <div id="seafile-health-details" class="health-status-box mt-2" style="display: none;"></div>
 
           <hr class="divider">
 
@@ -336,6 +404,24 @@
           <div class="form-check mt-2">
             <input type="checkbox" id="setting-auto-upload" checked>
             <label for="setting-auto-upload">Auto-upload scans to Seafile after scanning</label>
+          </div>
+
+          <hr class="divider">
+
+          <!-- App Updates & Maintenance -->
+          <div class="settings-section">
+            <div class="settings-section-header">
+              <div>
+                <h4 class="settings-subtitle">🔄 In-App Updates & APK</h4>
+                <p class="text-xs text-muted">Version <span id="settings-app-version">1.0.0</span> • Direct APK download & web updates</p>
+              </div>
+              <button type="button" id="btn-check-updates" class="btn btn-secondary btn-sm" onclick="NoteScanUpdater.check({ manual: true })">🔍 Check Updates</button>
+            </div>
+            <div class="mt-2">
+              <a href="/api/updates/download-apk" class="btn btn-secondary btn-sm" download="NoteScan.apk" style="display: inline-flex; align-items: center; gap: 0.4rem; text-decoration: none;">
+                <span>📲</span> Direct Download NoteScan.apk
+              </a>
+            </div>
           </div>
 
           <hr class="divider">
@@ -361,6 +447,44 @@
       </div>
     </div>
 
+    <!-- Direct QR Code File Share Modal -->
+    <div id="modal-qr-share" class="modal-backdrop">
+      <div class="modal-dialog qr-share-dialog">
+        <div class="modal-header">
+          <h3>📲 Direct Device Share</h3>
+          <button class="btn-close" id="btn-close-qr-share">×</button>
+        </div>
+        <div class="modal-body text-center">
+          <p class="text-sm text-muted">Scan this QR code with any iPhone, iPad, Android phone, or laptop to download or view immediately:</p>
+          <div class="qr-share-box">
+            <canvas id="qr-share-canvas" width="240" height="240"></canvas>
+            <img id="qr-share-image" alt="QR Code Share" class="qr-share-img" style="display: none;">
+          </div>
+          <div class="share-url-container mt-2">
+            <input type="text" id="qr-share-url-input" class="form-control text-sm" readonly>
+            <button id="btn-copy-share-url" class="btn btn-secondary btn-sm" title="Copy Link to Clipboard">📋 Copy</button>
+          </div>
+          <p id="qr-share-info-text" class="text-xs text-muted mt-2"></p>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-open-share-url" class="btn btn-secondary btn-sm">🌐 Open Link</button>
+          <button id="btn-done-qr-share" class="btn btn-primary btn-sm">Done</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- iOS Add to Home Screen (A2HS) Helper Banner -->
+    <div id="ios-a2hs-banner" class="ios-a2hs-banner" style="display: none;">
+      <div class="ios-a2hs-content">
+        <div class="ios-a2hs-icon">🚀</div>
+        <div class="ios-a2hs-text">
+          <strong>Add NoteScan to iPhone / iPad Home Screen</strong>
+          <p>Tap <svg class="ios-share-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg> <strong>Share</strong> then tap <strong>'Add to Home Screen'</strong> for the full-screen RocketScan experience.</p>
+        </div>
+        <button id="btn-close-a2hs" class="ios-a2hs-close" aria-label="Dismiss">✕</button>
+      </div>
+    </div>
+
     <!-- Toast Notification Container -->
     <div id="toast-container" class="toast-container"></div>
 
@@ -372,14 +496,18 @@
 
   </div>
 
-  <!-- Local jsPDF Bundle -->
+  <!-- Local Libraries -->
   <script src="/js/jspdf.umd.min.js"></script>
+  <script src="/js/jszip.min.js"></script>
+  <script src="/js/qrcode.min.js"></script>
   <!-- Application Scripts -->
   <script src="/js/vision.js"></script>
   <script src="/js/scanner.js"></script>
+  <script src="/js/export-manager.js"></script>
   <script src="/js/pdf-builder.js"></script>
   <script src="/js/storage.js"></script>
   <script src="/js/seafile-api.js"></script>
+  <script src="/js/updater.js"></script>
   <script src="/js/app.js"></script>
 
   <!-- PWA Service Worker Registration -->

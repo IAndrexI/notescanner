@@ -1,6 +1,7 @@
 /**
  * CameraScanner: Manages live camera stream, torch control,
- * real-time viewfinder guides, capture, and gallery image imports.
+ * real-time viewfinder guides, capture, gallery image imports,
+ * and robust Apple / iOS Safari camera permission & rear-lens selection.
  */
 class CameraScanner {
   constructor(videoElement, canvasOverlay, options = {}) {
@@ -13,49 +14,141 @@ class CameraScanner {
     this.onFrameCallback = options.onFrame || null;
     this.animationId = null;
     this.isActive = false;
+
+    // Apply critical iOS Safari video playback attributes
+    if (this.video) {
+      this.video.setAttribute('playsinline', 'true');
+      this.video.setAttribute('webkit-playsinline', 'true');
+      this.video.setAttribute('autoplay', 'true');
+      this.video.setAttribute('muted', 'true');
+      this.video.muted = true;
+    }
   }
 
-  // Start back camera
+  /**
+   * Helper to identify Apple iOS devices (iPhone, iPad, iPod, or iPadOS desktop UA)
+   */
+  static isIOS() {
+    return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  }
+
+  /**
+   * Enumerate video input devices to find the primary rear/back lens
+   */
+  async getRearCameraDeviceId() {
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return null;
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter(d => d.kind === 'videoinput');
+      if (videoDevices.length <= 1) return null;
+
+      // Prefer back/rear/environment camera (avoiding ultra-wide lens if specifically labeled)
+      const primaryRear = videoDevices.find(d => {
+        const label = (d.label || '').toLowerCase();
+        return (label.includes('back') || label.includes('rear') || label.includes('environment')) &&
+               !label.includes('wide') && !label.includes('0.5x') && !label.includes('tele');
+      }) || videoDevices.find(d => {
+        const label = (d.label || '').toLowerCase();
+        return label.includes('back') || label.includes('rear') || label.includes('environment');
+      });
+
+      return primaryRear ? primaryRear.deviceId : null;
+    } catch (e) {
+      console.warn('[CameraScanner] Device enumeration notice:', e.message);
+      return null;
+    }
+  }
+
+  /**
+   * Start rear camera with multi-stage iOS-resilient fallback
+   */
   async start() {
     try {
       this.stop();
 
-      const constraints = {
-        audio: false,
-        video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1920, min: 1280 },
-          height: { ideal: 1080, min: 720 }
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Camera API (getUserMedia) not supported in this browser.');
+      }
+
+      const rearDeviceId = await this.getRearCameraDeviceId();
+
+      // Progressive constraint tiers: starting from ideal high-res down to basic video
+      const constraintAttempts = [
+        // Tier 1: Target rear camera deviceId or ideal environment with 1080p
+        rearDeviceId ? {
+          audio: false,
+          video: {
+            deviceId: { exact: rearDeviceId },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 }
+          }
+        } : {
+          audio: false,
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 }
+          }
+        },
+        // Tier 2: Ideal environment without resolution requirements (iOS Safari friendly)
+        {
+          audio: false,
+          video: {
+            facingMode: { ideal: 'environment' }
+          }
+        },
+        // Tier 3: Direct environment constraint
+        {
+          audio: false,
+          video: {
+            facingMode: 'environment'
+          }
+        },
+        // Tier 4: Generic video (handles front camera or desktop webcams)
+        {
+          audio: false,
+          video: true
         }
-      };
+      ];
 
-      this.stream = await navigator.mediaDevices.getUserMedia(constraints);
-      this.video.srcObject = this.stream;
-      await this.video.play();
-      this.isActive = true;
+      let lastError = null;
+      for (const constraints of constraintAttempts) {
+        try {
+          this.stream = await navigator.mediaDevices.getUserMedia(constraints);
+          this.video.srcObject = this.stream;
 
-      // Check if torch/flash is supported by the camera track
-      const track = this.getVideoTrack();
-      if (track) {
-        const capabilities = track.getCapabilities ? track.getCapabilities() : {};
-        this.hasTorch = Boolean(capabilities.torch);
+          // Re-assert inline playback attributes for iOS Safari
+          this.video.setAttribute('playsinline', 'true');
+          this.video.setAttribute('webkit-playsinline', 'true');
+          this.video.muted = true;
+
+          await this.video.play();
+          this.isActive = true;
+
+          // Check if torch/flash is supported by the camera track
+          const track = this.getVideoTrack();
+          if (track) {
+            const capabilities = track.getCapabilities ? track.getCapabilities() : {};
+            this.hasTorch = Boolean(capabilities.torch);
+          }
+
+          this.startOverlayLoop();
+          return { success: true, hasTorch: this.hasTorch, isIOS: CameraScanner.isIOS() };
+        } catch (attemptErr) {
+          lastError = attemptErr;
+          console.warn('[CameraScanner] Attempt constraint tier failed:', attemptErr.name || attemptErr.message);
+          if (this.stream) {
+            this.stream.getTracks().forEach(t => t.stop());
+            this.stream = null;
+          }
+        }
       }
 
-      this.startOverlayLoop();
-      return { success: true, hasTorch: this.hasTorch };
+      throw lastError || new Error('Could not initialize camera stream');
     } catch (err) {
-      console.warn('Camera start error:', err);
-      // Fallback without strict resolution constraints
-      try {
-        this.stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-        this.video.srcObject = this.stream;
-        await this.video.play();
-        this.isActive = true;
-        this.startOverlayLoop();
-        return { success: true, hasTorch: false };
-      } catch (fallbackErr) {
-        throw new Error('Camera access denied or unavailable: ' + fallbackErr.message);
-      }
+      console.warn('[CameraScanner] Camera start error:', err);
+      throw new Error('Camera access denied or unavailable: ' + (err.message || 'Permission denied'));
     }
   }
 
@@ -75,7 +168,7 @@ class CameraScanner {
       });
       return this.torchEnabled;
     } catch (err) {
-      console.error('Torch error:', err);
+      console.error('[CameraScanner] Torch error:', err);
       return false;
     }
   }

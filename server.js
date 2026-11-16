@@ -7,6 +7,8 @@ const os = require('os');
 const QRCode = require('qrcode');
 const SeafileClient = require('./seafile-client');
 
+const pkg = require('./package.json');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 const upload = multer({ limits: { fileSize: 100 * 1024 * 1024 } }); // 100MB max
@@ -20,20 +22,28 @@ const DEFAULT_PRESETS = [
   { id: 'journal', name: 'Journal', icon: '📓', repoId: '', repoName: '', folder: '/RocketScan/Journal' }
 ];
 
-// Default initial config
-function loadConfig() {
-  try {
-    if (fs.existsSync(CONFIG_FILE)) {
-      const parsed = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-      if (!parsed.presets || !Array.isArray(parsed.presets) || parsed.presets.length === 0) {
-        parsed.presets = DEFAULT_PRESETS;
-      }
-      return parsed;
-    }
-  } catch (err) {
-    console.error('Error loading config.json:', err);
+// Helper: Semantic version comparison (1: v1 > v2, -1: v1 < v2, 0: v1 == v2)
+function parseSemver(v) {
+  if (!v) return [0, 0, 0];
+  const cleaned = v.toString().replace(/^v/i, '').trim();
+  const parts = cleaned.split('-')[0].split('.').map(p => parseInt(p, 10) || 0);
+  while (parts.length < 3) parts.push(0);
+  return parts;
+}
+
+function compareSemver(v1, v2) {
+  const p1 = parseSemver(v1);
+  const p2 = parseSemver(v2);
+  for (let i = 0; i < 3; i++) {
+    if (p1[i] > p2[i]) return 1;
+    if (p1[i] < p2[i]) return -1;
   }
-  return {
+  return 0;
+}
+
+// Default initial config with persistent token caching
+function loadConfig() {
+  let cfg = {
     serverUrl: '',
     token: '',
     repoId: '',
@@ -43,11 +53,37 @@ function loadConfig() {
     filterDefault: 'magic',
     presets: DEFAULT_PRESETS
   };
+
+  try {
+    if (fs.existsSync(CONFIG_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+      if (!parsed.presets || !Array.isArray(parsed.presets) || parsed.presets.length === 0) {
+        parsed.presets = DEFAULT_PRESETS;
+      }
+      cfg = { ...cfg, ...parsed };
+    }
+  } catch (err) {
+    console.error('Error loading config.json:', err);
+  }
+
+  // Check persistent token cache if token is missing but serverUrl exists
+  if (!cfg.token && cfg.serverUrl) {
+    const cachedToken = SeafileClient.getCachedToken(cfg.serverUrl);
+    if (cachedToken) {
+      cfg.token = cachedToken;
+      console.log(`[Config] Restored Seafile token from persistent token cache for ${cfg.serverUrl}`);
+    }
+  }
+
+  return cfg;
 }
 
 function saveConfig(cfg) {
   try {
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2), 'utf8');
+    if (cfg.serverUrl && cfg.token) {
+      SeafileClient.setCachedToken(cfg.serverUrl, '', cfg.token, { repoId: cfg.repoId, repoName: cfg.repoName });
+    }
   } catch (err) {
     console.error('Error saving config.json:', err);
   }
@@ -98,6 +134,27 @@ app.get('/api/network-info', async (req, res) => {
   }
 });
 
+// API: Generate QR Code for arbitrary URL / text (Direct Device Sharing)
+app.get('/api/qrcode', async (req, res) => {
+  try {
+    const text = req.query.text;
+    if (!text) {
+      return res.status(400).json({ error: 'Query parameter "text" is required' });
+    }
+    const qrDataUrl = await QRCode.toDataURL(text, {
+      margin: 1,
+      width: 280,
+      color: {
+        dark: '#0f172a',
+        light: '#ffffff'
+      }
+    });
+    res.json({ qrCode: qrDataUrl, text });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // API: Config endpoints
 app.get('/api/config', (req, res) => {
   res.json({
@@ -108,7 +165,8 @@ app.get('/api/config', (req, res) => {
     folder: appConfig.folder,
     autoUpload: appConfig.autoUpload !== undefined ? appConfig.autoUpload : true,
     filterDefault: appConfig.filterDefault || 'magic',
-    presets: appConfig.presets || DEFAULT_PRESETS
+    presets: appConfig.presets || DEFAULT_PRESETS,
+    version: pkg.version
   });
 });
 
@@ -127,6 +185,78 @@ app.post('/api/config', (req, res) => {
   res.json({ success: true, config: appConfig });
 });
 
+// -------------------------------------------------------------
+// Seafile Connection, Health Check & Auto-Library Selection
+// -------------------------------------------------------------
+
+// API: Health check endpoint
+app.get('/api/seafile/health', async (req, res) => {
+  if (!appConfig.serverUrl) {
+    return res.json({
+      healthy: false,
+      status: 'unconfigured',
+      serverUrl: '',
+      hasToken: false,
+      message: 'Seafile server is not configured'
+    });
+  }
+
+  try {
+    const client = new SeafileClient(appConfig.serverUrl, appConfig.token);
+    const health = await client.checkHealth();
+    let libraryInfo = null;
+
+    if (health.healthy && appConfig.token) {
+      try {
+        const repos = await client.listRepos();
+        const activeRepo = repos.find(r => r.id === appConfig.repoId);
+        libraryInfo = {
+          totalLibraries: repos.length,
+          activeRepoFound: Boolean(activeRepo),
+          activeRepoName: activeRepo ? activeRepo.name : appConfig.repoName
+        };
+      } catch (e) {}
+    }
+
+    res.json({
+      ...health,
+      activeRepoId: appConfig.repoId,
+      activeRepoName: appConfig.repoName,
+      libraryInfo
+    });
+  } catch (err) {
+    res.status(500).json({
+      healthy: false,
+      status: 'error',
+      error: err.message
+    });
+  }
+});
+
+// API: Auto-select library endpoint
+app.post('/api/seafile/auto-select-repo', async (req, res) => {
+  try {
+    const client = getSeafileClient();
+    const selected = await client.selectBestLibrary();
+    if (!selected) {
+      return res.status(404).json({ error: 'No libraries available in this Seafile account' });
+    }
+
+    appConfig.repoId = selected.id;
+    appConfig.repoName = selected.name;
+    saveConfig(appConfig);
+
+    res.json({
+      success: true,
+      repoId: selected.id,
+      repoName: selected.name,
+      selectedRepo: selected
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // API: Authenticate with username and password
 app.post('/api/seafile/login', async (req, res) => {
   try {
@@ -141,19 +271,35 @@ app.post('/api/seafile/login', async (req, res) => {
 
     appConfig.serverUrl = serverUrl.trim();
     appConfig.token = token;
+
+    // Auto-select library if none configured
+    if (!appConfig.repoId) {
+      try {
+        const autoRepo = await client.selectBestLibrary();
+        if (autoRepo) {
+          appConfig.repoId = autoRepo.id;
+          appConfig.repoName = autoRepo.name;
+        }
+      } catch (e) {
+        console.warn('Auto-library selection after login skipped:', e.message);
+      }
+    }
+
     saveConfig(appConfig);
 
     res.json({
       success: true,
       token,
-      account: accountInfo
+      account: accountInfo,
+      repoId: appConfig.repoId,
+      repoName: appConfig.repoName
     });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-// API: Test token connection
+// API: Test token connection with auto-library detection
 app.post('/api/seafile/test', async (req, res) => {
   try {
     const serverUrl = req.body.serverUrl || appConfig.serverUrl;
@@ -166,11 +312,26 @@ app.post('/api/seafile/test', async (req, res) => {
     const account = await client.getAccountInfo();
     const repos = await client.listRepos();
 
+    // Cache valid token persistently
+    SeafileClient.setCachedToken(serverUrl, account.email || '', token);
+
+    // If appConfig doesn't have a valid repo, auto-select from loaded repos
+    let suggestedRepo = null;
+    if (!appConfig.repoId || !repos.some(r => r.id === appConfig.repoId)) {
+      suggestedRepo = await client.selectBestLibrary();
+      if (suggestedRepo && req.body.autoSaveRepo) {
+        appConfig.repoId = suggestedRepo.id;
+        appConfig.repoName = suggestedRepo.name;
+        saveConfig(appConfig);
+      }
+    }
+
     res.json({
       success: true,
       account,
       librariesCount: repos.length,
-      repos
+      repos,
+      suggestedRepo
     });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -188,6 +349,66 @@ app.get('/api/seafile/repos', async (req, res) => {
   }
 });
 
+// -------------------------------------------------------------
+// Seafile Public Share Links (/api2/repos/:repo_id/file/shared-link/)
+// -------------------------------------------------------------
+
+// Explicit helper endpoint for frontend apps
+app.post('/api/seafile/share-link', async (req, res) => {
+  try {
+    const repoId = req.body.repoId || appConfig.repoId;
+    const filePath = req.body.path;
+
+    if (!repoId || !filePath) {
+      return res.status(400).json({ error: 'repoId and path are required' });
+    }
+
+    const client = getSeafileClient();
+    const shareInfo = await client.createShareLink(repoId, filePath, {
+      password: req.body.password,
+      expire: req.body.expire
+    });
+
+    res.json({
+      success: true,
+      ...shareInfo
+    });
+  } catch (err) {
+    console.error('Create share link error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Direct Seafile proxy endpoint matching Seafile API specification:
+// PUT/GET/POST /api2/repos/:repo_id/file/shared-link/
+app.all(['/api2/repos/:repo_id/file/shared-link/', '/api2/repos/:repo_id/file/shared-link', '/api/repos/:repo_id/file/shared-link/'], async (req, res) => {
+  try {
+    const repoId = req.params.repo_id || appConfig.repoId;
+    const filePath = req.query.p || req.body.p || req.body.path;
+
+    if (!repoId || !filePath) {
+      return res.status(400).json({ error: 'repo_id and file path (p) are required' });
+    }
+
+    const client = getSeafileClient();
+    const shareInfo = await client.createShareLink(repoId, filePath, {
+      password: req.body.password,
+      expire: req.body.expire
+    });
+
+    res.json({
+      success: true,
+      shared_link: shareInfo.shareUrl,
+      link: shareInfo.shareUrl,
+      token: shareInfo.token,
+      repoId,
+      path: filePath
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // API: Upload scanned file to Seafile
 app.post('/api/seafile/upload', upload.single('file'), async (req, res) => {
   try {
@@ -195,15 +416,23 @@ app.post('/api/seafile/upload', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'No file uploaded.' });
     }
 
-    const repoId = req.body.repoId || appConfig.repoId;
+    const client = getSeafileClient();
+    let repoId = req.body.repoId || appConfig.repoId;
     const folder = req.body.folder || appConfig.folder || '/RocketScan';
     const fileName = req.body.fileName || req.file.originalname || `Scan_${Date.now()}.pdf`;
 
+    // Auto-select library if missing
     if (!repoId) {
-      return res.status(400).json({ error: 'No target Seafile library (repoId) specified.' });
+      const autoRepo = await client.selectBestLibrary();
+      if (autoRepo) {
+        repoId = autoRepo.id;
+        appConfig.repoId = autoRepo.id;
+        appConfig.repoName = autoRepo.name;
+        saveConfig(appConfig);
+      } else {
+        return res.status(400).json({ error: 'No target Seafile library (repoId) specified or found.' });
+      }
     }
-
-    const client = getSeafileClient();
 
     // Ensure folder exists
     const cleanFolder = folder.replace(/^\/+|\/+$/g, '');
@@ -294,6 +523,128 @@ app.get('/api/seafile/file-url', async (req, res) => {
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
+});
+
+// -------------------------------------------------------------
+// In-App Updater Endpoints
+// -------------------------------------------------------------
+
+// API: Check for GitHub releases updates
+app.get('/api/updates/check', async (req, res) => {
+  const currentVersion = pkg.version || '1.0.0';
+  const repoOwner = 'IAndrexI';
+  const repoName = 'notescanner';
+  const releasesUrl = `https://api.github.com/repos/${repoOwner}/${repoName}/releases/latest`;
+  const tagsUrl = `https://api.github.com/repos/${repoOwner}/${repoName}/tags`;
+
+  // Support simulated update for testing / verification
+  if (req.query.simulate === 'true' || process.env.SIMULATE_UPDATE === 'true') {
+    return res.json({
+      hasUpdate: true,
+      currentVersion,
+      latestVersion: '1.1.0',
+      releaseName: 'NoteScan v1.1.0 (Seafile & In-App Updater Release)',
+      releaseNotes: '• Direct APK in-app updater with 1-tap download\n• Seafile health check & exponential backoff\n• 1-tap public note sharing links\n• Persistent auth token caching',
+      publishedAt: new Date().toISOString(),
+      htmlUrl: `https://github.com/${repoOwner}/${repoName}/releases/tag/v1.1.0`,
+      apkUrl: '/api/updates/download-apk',
+      apkDirectDownload: '/api/updates/download-apk'
+    });
+  }
+
+  try {
+    const ghRes = await fetch(releasesUrl, {
+      headers: {
+        'User-Agent': `NoteScan-App/${currentVersion}`,
+        'Accept': 'application/vnd.github.v3+json'
+      }
+    });
+
+    if (ghRes.ok) {
+      const release = await ghRes.json();
+      const latestTag = release.tag_name || release.name || '';
+      const latestVersion = latestTag.replace(/^v/i, '').trim();
+
+      const hasUpdate = compareSemver(latestVersion, currentVersion) > 0;
+
+      // Locate APK asset in release if available
+      let apkAsset = null;
+      if (Array.isArray(release.assets)) {
+        apkAsset = release.assets.find(a => a.name.toLowerCase().endsWith('.apk'));
+      }
+
+      return res.json({
+        hasUpdate,
+        currentVersion,
+        latestVersion,
+        releaseName: release.name || latestTag,
+        releaseNotes: release.body || '',
+        publishedAt: release.published_at,
+        htmlUrl: release.html_url,
+        apkUrl: apkAsset ? apkAsset.browser_download_url : '/api/updates/download-apk',
+        apkDirectDownload: '/api/updates/download-apk'
+      });
+    }
+
+    // Fallback: Check tags if releases/latest is 404
+    if (ghRes.status === 404) {
+      const tagsRes = await fetch(tagsUrl, {
+        headers: {
+          'User-Agent': `NoteScan-App/${currentVersion}`,
+          'Accept': 'application/vnd.github.v3+json'
+        }
+      });
+
+      if (tagsRes.ok) {
+        const tags = await tagsRes.json();
+        if (Array.isArray(tags) && tags.length > 0) {
+          const topTag = tags[0].name.replace(/^v/i, '').trim();
+          const hasUpdate = compareSemver(topTag, currentVersion) > 0;
+          return res.json({
+            hasUpdate,
+            currentVersion,
+            latestVersion: topTag,
+            releaseName: `NoteScan v${topTag}`,
+            releaseNotes: 'New version available on GitHub.',
+            publishedAt: null,
+            htmlUrl: `https://github.com/${repoOwner}/${repoName}/releases/tag/${tags[0].name}`,
+            apkUrl: '/api/updates/download-apk',
+            apkDirectDownload: '/api/updates/download-apk'
+          });
+        }
+      }
+    }
+
+    // Default: Up to date or repository has no releases yet
+    res.json({
+      hasUpdate: false,
+      currentVersion,
+      latestVersion: currentVersion,
+      message: 'NoteScan is up to date.'
+    });
+  } catch (err) {
+    console.warn('[Updater] Failed to check GitHub updates:', err.message);
+    res.json({
+      hasUpdate: false,
+      currentVersion,
+      latestVersion: currentVersion,
+      error: `Could not check updates: ${err.message}`
+    });
+  }
+});
+
+// API: 1-Tap direct download of NoteScan.apk
+app.get('/api/updates/download-apk', (req, res) => {
+  const localApkPath = path.join(__dirname, 'NoteScan.apk');
+  if (fs.existsSync(localApkPath)) {
+    res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+    res.setHeader('Content-Disposition', 'attachment; filename="NoteScan.apk"');
+    const stream = fs.createReadStream(localApkPath);
+    return stream.pipe(res);
+  }
+
+  // If local APK is not found, redirect to GitHub releases
+  res.redirect(`https://github.com/IAndrexI/notescanner/releases/latest`);
 });
 
 // API: Check if local Seafile desktop client directory exists on PC (Windows, Linux, macOS)
@@ -390,6 +741,7 @@ app.listen(PORT, '0.0.0.0', () => {
   const localIp = getLocalIp();
   console.log(`=======================================================`);
   console.log(`  RocketScan for Seafile is active!`);
+  console.log(`  Version:               v${pkg.version}`);
   console.log(`  PC Desktop Interface:  http://localhost:${PORT}`);
   console.log(`  Android Phone Link:    http://${localIp}:${PORT}`);
   console.log(`=======================================================`);
