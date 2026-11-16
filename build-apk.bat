@@ -15,16 +15,18 @@ if exist "C:\Program Files\Java\jdk-21.0.11" (
 echo [1/2] Syncing web assets into native Android project...
 call npx cap sync android
 
-echo [2/2] Compiling Debug APK with Gradle...
+echo [2/2] Compiling Signed Release APK with Gradle...
 cd android
-call gradlew.bat assembleDebug
+call gradlew.bat assembleRelease
+cd ..
 
-if exist "app\build\outputs\apk\debug\app-debug.apk" (
+if exist "android\app\build\outputs\apk\release\app-release.apk" (
+    copy /y "android\app\build\outputs\apk\release\app-release.apk" "NoteScan.apk" >nul
     echo.
     echo ====================================================
     echo   BUILD SUCCESSFUL!
-    echo   Your APK is ready at:
-    echo   android\app\build\outputs\apk\debug\app-debug.apk
+    echo   Your signed Release APK is ready at:
+    echo   NoteScan.apk
     echo ====================================================
 ) else (
     echo.
