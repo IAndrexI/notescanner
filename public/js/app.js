@@ -4,10 +4,10 @@
 
 // Default Rocketbook Quick-Send Destination Presets
 const DEFAULT_PRESETS = [
-  { id: 'notes', name: 'Notes', icon: '📁', repoId: '', repoName: '', folder: '/RocketScan/Notes' },
-  { id: 'work', name: 'Work', icon: '💼', repoId: '', repoName: '', folder: '/RocketScan/Work' },
-  { id: 'receipts', name: 'Receipts', icon: '🧾', repoId: '', repoName: '', folder: '/RocketScan/Receipts' },
-  { id: 'journal', name: 'Journal', icon: '📓', repoId: '', repoName: '', folder: '/RocketScan/Journal' }
+  { id: 'notes', name: 'Notes', icon: '📁', repoId: 'c1b2b0d8-da24-439b-8513-efd16263073a', repoName: 'scannednote', folder: '/' },
+  { id: 'work', name: 'Work', icon: '💼', repoId: 'c1b2b0d8-da24-439b-8513-efd16263073a', repoName: 'scannednote', folder: '/Work' },
+  { id: 'receipts', name: 'Receipts', icon: '🧾', repoId: 'c1b2b0d8-da24-439b-8513-efd16263073a', repoName: 'scannednote', folder: '/Receipts' },
+  { id: 'journal', name: 'Journal', icon: '📓', repoId: 'c1b2b0d8-da24-439b-8513-efd16263073a', repoName: 'scannednote', folder: '/Journal' }
 ];
 
 // Application State
@@ -21,11 +21,11 @@ const state = {
   pages: [], // Array of { id, originalImage, corners, canvas, filter, rotation }
   documentTitle: '',
   seafileConfig: {
-    serverUrl: '',
+    serverUrl: 'https://seafile.protutech.vip',
     hasToken: false,
-    repoId: '',
-    repoName: '',
-    folder: '/RocketScan',
+    repoId: 'c1b2b0d8-da24-439b-8513-efd16263073a',
+    repoName: 'scannednote',
+    folder: '/',
     autoUpload: true
   },
   presets: [...DEFAULT_PRESETS],
@@ -192,6 +192,27 @@ function initUI() {
     loadSeafileGallery();
   });
   document.getElementById('nav-settings')?.addEventListener('click', () => openSettingsModal());
+
+  // Smart Seafile URL detection on paste/input
+  document.getElementById('setting-server-url')?.addEventListener('input', (e) => {
+    const val = e.target.value.trim();
+    const match = val.match(/^(https?:\/\/[^\/]+)\/library\/([0-9a-fA-F-]+)(?:\/([^\/]+))?(?:\/(.*))?/);
+    if (match) {
+      e.target.value = match[1];
+      const repoId = match[2];
+      const repoName = match[3] ? decodeURIComponent(match[3]) : 'scannednote';
+      const subfolder = match[4] ? '/' + decodeURIComponent(match[4]).replace(/\/+$/, '') : '/';
+      const folderInput = document.getElementById('setting-folder');
+      if (folderInput) folderInput.value = subfolder;
+      state.seafileConfig.serverUrl = match[1];
+      state.seafileConfig.repoId = repoId;
+      state.seafileConfig.repoName = repoName;
+      state.seafileConfig.folder = subfolder;
+      if (window.showToast) {
+        showToast(`✓ Detected Seafile Library "${repoName}" (${repoId.substring(0, 8)}...)`, 'info');
+      }
+    }
+  });
 
   // Camera buttons
   document.getElementById('btn-capture')?.addEventListener('click', handleCapture);
@@ -1495,9 +1516,9 @@ function openSettingsModal() {
   const folderInput = document.getElementById('setting-folder');
   const autoUploadCheck = document.getElementById('setting-auto-upload');
 
-  if (urlInput) urlInput.value = state.seafileConfig.serverUrl || '';
+  if (urlInput) urlInput.value = state.seafileConfig.serverUrl || 'https://seafile.protutech.vip';
   if (tokenInput) tokenInput.value = '';
-  if (folderInput) folderInput.value = state.seafileConfig.folder || '/RocketScan';
+  if (folderInput) folderInput.value = state.seafileConfig.folder || '/';
   if (autoUploadCheck) autoUploadCheck.checked = state.seafileConfig.autoUpload;
 
   renderPresetsSettingsList();

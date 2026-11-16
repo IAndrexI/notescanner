@@ -16,10 +16,10 @@ const upload = multer({ limits: { fileSize: 100 * 1024 * 1024 } }); // 100MB max
 const CONFIG_FILE = process.env.CONFIG_PATH || (process.env.DATA_DIR ? path.join(process.env.DATA_DIR, 'config.json') : path.join(__dirname, 'config.json'));
 
 const DEFAULT_PRESETS = [
-  { id: 'notes', name: 'Notes', icon: '📁', repoId: '', repoName: '', folder: '/RocketScan/Notes' },
-  { id: 'work', name: 'Work', icon: '💼', repoId: '', repoName: '', folder: '/RocketScan/Work' },
-  { id: 'receipts', name: 'Receipts', icon: '🧾', repoId: '', repoName: '', folder: '/RocketScan/Receipts' },
-  { id: 'journal', name: 'Journal', icon: '📓', repoId: '', repoName: '', folder: '/RocketScan/Journal' }
+  { id: 'notes', name: 'Notes', icon: '📁', repoId: 'c1b2b0d8-da24-439b-8513-efd16263073a', repoName: 'scannednote', folder: '/' },
+  { id: 'work', name: 'Work', icon: '💼', repoId: 'c1b2b0d8-da24-439b-8513-efd16263073a', repoName: 'scannednote', folder: '/Work' },
+  { id: 'receipts', name: 'Receipts', icon: '🧾', repoId: 'c1b2b0d8-da24-439b-8513-efd16263073a', repoName: 'scannednote', folder: '/Receipts' },
+  { id: 'journal', name: 'Journal', icon: '📓', repoId: 'c1b2b0d8-da24-439b-8513-efd16263073a', repoName: 'scannednote', folder: '/Journal' }
 ];
 
 // Helper: Semantic version comparison (1: v1 > v2, -1: v1 < v2, 0: v1 == v2)
@@ -44,11 +44,11 @@ function compareSemver(v1, v2) {
 // Default initial config with persistent token caching
 function loadConfig() {
   let cfg = {
-    serverUrl: '',
+    serverUrl: 'https://seafile.protutech.vip',
     token: '',
-    repoId: '',
-    repoName: '',
-    folder: '/RocketScan',
+    repoId: 'c1b2b0d8-da24-439b-8513-efd16263073a',
+    repoName: 'scannednote',
+    folder: '/',
     autoUpload: true,
     filterDefault: 'magic',
     presets: DEFAULT_PRESETS

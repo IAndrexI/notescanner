@@ -1,15 +1,15 @@
 {
-  "serverUrl": "https://seafile.example.com",
+  "serverUrl": "https://seafile.protutech.vip",
   "token": "",
-  "repoId": "",
-  "repoName": "",
-  "folder": "/RocketScan",
-  "autoUpload": false,
+  "repoId": "c1b2b0d8-da24-439b-8513-efd16263073a",
+  "repoName": "scannednote",
+  "folder": "/",
+  "autoUpload": true,
   "filterDefault": "magic",
-  "quickPresets": [
-    { "id": "preset-notes", "icon": "📁", "name": "Notes", "repoId": "", "folder": "/RocketScan/Notes" },
-    { "id": "preset-work", "icon": "💼", "name": "Work", "repoId": "", "folder": "/RocketScan/Work" },
-    { "id": "preset-receipts", "icon": "🧾", "name": "Receipts", "repoId": "", "folder": "/RocketScan/Receipts" },
-    { "id": "preset-journal", "icon": "📓", "name": "Journal", "repoId": "", "folder": "/RocketScan/Journal" }
+  "presets": [
+    { "id": "preset-notes", "icon": "📁", "name": "Notes", "repoId": "c1b2b0d8-da24-439b-8513-efd16263073a", "repoName": "scannednote", "folder": "/" },
+    { "id": "preset-work", "icon": "💼", "name": "Work", "repoId": "c1b2b0d8-da24-439b-8513-efd16263073a", "repoName": "scannednote", "folder": "/Work" },
+    { "id": "preset-receipts", "icon": "🧾", "name": "Receipts", "repoId": "c1b2b0d8-da24-439b-8513-efd16263073a", "repoName": "scannednote", "folder": "/Receipts" },
+    { "id": "preset-journal", "icon": "📓", "name": "Journal", "repoId": "c1b2b0d8-da24-439b-8513-efd16263073a", "repoName": "scannednote", "folder": "/Journal" }
   ]
 }
