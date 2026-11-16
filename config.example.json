@@ -1,0 +1,15 @@
+{
+  "serverUrl": "https://seafile.example.com",
+  "token": "",
+  "repoId": "",
+  "repoName": "",
+  "folder": "/RocketScan",
+  "autoUpload": false,
+  "filterDefault": "magic",
+  "quickPresets": [
+    { "id": "preset-notes", "icon": "📁", "name": "Notes", "repoId": "", "folder": "/RocketScan/Notes" },
+    { "id": "preset-work", "icon": "💼", "name": "Work", "repoId": "", "folder": "/RocketScan/Work" },
+    { "id": "preset-receipts", "icon": "🧾", "name": "Receipts", "repoId": "", "folder": "/RocketScan/Receipts" },
+    { "id": "preset-journal", "icon": "📓", "name": "Journal", "repoId": "", "folder": "/RocketScan/Journal" }
+  ]
+}

@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>RocketScan • Seafile Scanner & PC Viewer</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <div id="app" class="app-container">
+
+    <!-- Top Navigation Header -->
+    <header class="app-header">
+      <div class="header-brand">
+        <div class="brand-logo">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/>
+            <path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/>
+            <path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/>
+            <path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>
+          </svg>
+        </div>
+        <div class="brand-info">
+          <span class="brand-name">RocketScan</span>
+          <span id="seafile-status-badge" class="status-badge disconnected">
+            <span class="dot"></span> Seafile: Setup Required
+          </span>
+        </div>
+      </div>
+
+      <nav class="header-nav">
+        <button id="nav-scanner" class="nav-tab active">
+          <span class="tab-icon">📷</span>
+          <span class="tab-label">Scan</span>
+        </button>
+        <button id="nav-gallery" class="nav-tab">
+          <span class="tab-icon">📂</span>
+          <span class="tab-label">PC Notes</span>
+        </button>
+        <button id="nav-settings" class="nav-tab">
+          <span class="tab-icon">⚙️</span>
+          <span class="tab-label">Settings</span>
+        </button>
+      </nav>
+    </header>
+
+    <!-- Main Viewport Screens -->
+    <main class="app-main">
+
+      <!-- View 1: Real-time Camera Scanner -->
+      <section id="view-scanner" class="view-screen active">
+        <div class="scanner-viewport">
+          <video id="camera-feed" playsinline autoplay muted></video>
+          <canvas id="camera-overlay"></canvas>
+
+          <div class="scanner-hud-top">
+            <div id="scanner-page-badge" class="page-badge" style="display: none;">
+              <span id="scanner-page-count">0</span> pages scanned
+            </div>
+          </div>
+
+          <div class="scanner-hud-bottom">
+            <div class="hud-action-row">
+              <button id="btn-import-gallery" class="hud-circle-btn" title="Upload from Gallery">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
+                  <circle cx="9" cy="9" r="2"/>
+                  <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>
+                </svg>
+                <input type="file" id="file-gallery-input" accept="image/*" style="display: none;">
+              </button>
+
+              <button id="btn-capture" class="shutter-button" title="Capture Page">
+                <div class="shutter-inner"></div>
+              </button>
+
+              <button id="btn-torch" class="hud-circle-btn" title="Toggle Flash" style="display: none;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- View 2: Interactive 4-Corner & Perspective De-skew Editor -->
+      <section id="view-crop" class="view-screen">
+        <div class="crop-header">
+          <span class="crop-instructions">Drag corners to align page edges</span>
+          <button id="btn-crop-reset" class="btn-text">Reset</button>
+        </div>
+
+        <div class="crop-stage">
+          <canvas id="crop-canvas"></canvas>
+          <!-- Magnifying loupe for precision touch alignment -->
+          <div id="crop-loupe" class="crop-loupe" style="display: none;">
+            <canvas id="crop-loupe-canvas" width="120" height="120"></canvas>
+            <div class="loupe-crosshair"></div>
+          </div>
+        </div>
+
+        <div class="crop-footer">
+          <button id="btn-crop-cancel" class="btn btn-secondary">Retake</button>
+          <button id="btn-crop-confirm" class="btn btn-primary">
+            <span>Next: Apply Filter</span> →
+          </button>
+        </div>
+      </section>
+
+      <!-- View 3: Filter & Multi-page Review -->
+      <section id="view-filter" class="view-screen">
+        <div class="filter-header">
+          <button id="btn-filter-back" class="btn-icon">← Adjust Corners</button>
+          <button id="btn-rotate-page" class="btn-icon" title="Rotate 90°">🔄 Rotate</button>
+        </div>
+
+        <div class="filter-stage">
+          <img id="filter-preview-img" alt="Scanned Document Preview">
+        </div>
+
+        <div class="filter-bar">
+          <button class="filter-btn active" data-filter="magic">
+            <span class="filter-icon">🪄</span>
+            <span class="filter-name">Magic Ink</span>
+          </button>
+          <button class="filter-btn" data-filter="bw">
+            <span class="filter-icon">📄</span>
+            <span class="filter-name">Clean B&W</span>
+          </button>
+          <button class="filter-btn" data-filter="grayscale">
+            <span class="filter-icon">🔘</span>
+            <span class="filter-name">Grayscale</span>
+          </button>
+          <button class="filter-btn" data-filter="original">
+            <span class="filter-icon">📷</span>
+            <span class="filter-name">Original</span>
+          </button>
+        </div>
+
+        <!-- Rocketbook Quick-Send Destination Badges & 1-Tap Auto-Send -->
+        <div class="quick-dest-bar">
+          <div class="quick-dest-header">
+            <div class="quick-dest-title-group">
+              <span class="quick-dest-rocket">🚀</span>
+              <span class="quick-dest-title">Quick Send to Seafile:</span>
+              <span class="quick-dest-hint">1-tap upload</span>
+            </div>
+            <label class="auto-send-toggle-container" title="When enabled, tapping Save directly uploads to Seafile in 1 tap without extra prompts">
+              <input type="checkbox" id="review-auto-send-toggle" checked>
+              <span class="auto-send-switch"></span>
+              <span class="auto-send-text">1-Tap Auto-Send</span>
+            </label>
+          </div>
+          <div id="quick-dest-pills" class="quick-dest-pills">
+            <!-- Dynamically populated destination pills (📁 Notes, 💼 Work, 🧾 Receipts, 📓 Journal) -->
+          </div>
+        </div>
+
+        <div class="filter-footer">
+          <button id="btn-add-page" class="btn btn-secondary">
+            <span>➕ Add Page</span>
+          </button>
+          <button id="btn-finish-doc" class="btn btn-primary">
+            <span id="btn-finish-doc-text">Save & Seafile Backup</span> →
+          </button>
+        </div>
+      </section>
+
+      <!-- View 4: PC Desktop Notes & Seafile Gallery -->
+      <section id="view-gallery" class="view-screen">
+        <div class="pc-layout">
+          <!-- Left Sidebar / Phone Connect Info for PC users -->
+          <aside class="pc-sidebar">
+            <div class="card connect-card">
+              <h3>📱 Connect Android Phone</h3>
+              <p class="text-sm text-muted">Scan this QR code with your phone camera to start scanning on this PC:</p>
+              <div class="qr-container">
+                <img id="qr-code-img" alt="Scan to connect on mobile" />
+              </div>
+              <div class="lan-url-box">
+                <span class="url-label">Local Link:</span>
+                <code id="lan-url-display">http://localhost:3000</code>
+              </div>
+            </div>
+
+            <div class="card sync-info-card">
+              <h3>☁️ Seafile Destination</h3>
+              <p class="text-sm text-muted">Scans are backed up directly to your cloud library:</p>
+              <div class="info-row">
+                <span class="info-label">Library:</span>
+                <strong id="gallery-repo-label">RocketBook Scans</strong>
+              </div>
+              <div class="info-row">
+                <span class="info-label">Folder:</span>
+                <code id="gallery-folder-label">/RocketScan</code>
+              </div>
+              <p class="text-xs text-muted mt-2">
+                💡 If you have the Seafile desktop client on this PC/desktop, files sync directly to your local Seafile folder (Windows, Linux, macOS)!
+              </p>
+            </div>
+          </aside>
+
+          <!-- Main Gallery Explorer -->
+          <section class="gallery-main">
+            <div class="gallery-toolbar">
+              <h2>Scanned Notebooks & Documents</h2>
+              <button class="btn btn-secondary btn-sm" onclick="loadSeafileGallery()">
+                🔄 Refresh Seafile
+              </button>
+            </div>
+
+            <div id="gallery-empty" class="empty-state" style="display: none;">
+              <div class="empty-icon">📁</div>
+              <h3>No scans found in this Seafile folder</h3>
+              <p class="text-muted">Use the <strong>Scan</strong> tab on your phone to capture your first page!</p>
+            </div>
+
+            <div id="gallery-grid" class="gallery-grid">
+              <!-- Dynamically populated note cards -->
+            </div>
+          </section>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Save Document Modal -->
+    <div id="modal-save-doc" class="modal-backdrop">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h3>Save & Upload Document</h3>
+          <button class="btn-close" onclick="closeSaveDocModal()">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="save-doc-title">Document Title</label>
+            <input type="text" id="save-doc-title" class="form-control" placeholder="Notes_2026-11-15">
+          </div>
+          <div class="summary-box">
+            <div class="summary-item">
+              <span>Total Pages:</span>
+              <strong id="save-page-count">1 page</strong>
+            </div>
+            <div class="summary-item">
+              <span>Target Library:</span>
+              <strong id="save-repo-display">Default Library</strong>
+            </div>
+            <div class="summary-item">
+              <span>Format:</span>
+              <strong>Searchable PDF (A4)</strong>
+            </div>
+          </div>
+
+          <div class="form-group mt-3">
+            <label>1-Tap Quick-Send to Preset:</label>
+            <div id="modal-quick-dest-pills" class="quick-dest-pills"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-download-pdf" class="btn btn-secondary">
+            💾 Download Local PDF
+          </button>
+          <button id="btn-upload-seafile" class="btn btn-primary">
+            ☁️ Upload to Seafile
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Seafile Settings Modal -->
+    <div id="modal-settings" class="modal-backdrop">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h3>Seafile Server Settings</h3>
+          <button class="btn-close" onclick="closeSettingsModal()">×</button>
+        </div>
+        <div class="modal-body">
+          <!-- Server Configuration -->
+          <div class="form-group">
+            <label for="setting-server-url">Seafile Server URL</label>
+            <input type="url" id="setting-server-url" class="form-control" placeholder="https://seafile.example.com">
+            <small class="text-muted">Your self-hosted or cloud Seafile domain</small>
+          </div>
+
+          <!-- Login or Token Options -->
+          <details class="settings-accordion" open>
+            <summary><strong>Option A: Login with Account</strong></summary>
+            <form id="seafile-login-form" class="mt-2">
+              <div class="form-group">
+                <label for="login-username">Username / Email</label>
+                <input type="text" id="login-username" class="form-control" placeholder="user@example.com">
+              </div>
+              <div class="form-group">
+                <label for="login-password">Password</label>
+                <input type="password" id="login-password" class="form-control" placeholder="••••••••">
+              </div>
+              <button type="submit" class="btn btn-secondary btn-sm">Sign In & Generate Token</button>
+            </form>
+          </details>
+
+          <details class="settings-accordion mt-3">
+            <summary><strong>Option B: Use API Token Directly</strong></summary>
+            <div class="form-group mt-2">
+              <label for="setting-token">Seafile API Token</label>
+              <input type="password" id="setting-token" class="form-control" placeholder="Enter token from Seafile">
+            </div>
+          </details>
+
+          <div class="mt-3">
+            <button id="btn-test-connection" class="btn btn-secondary btn-sm">
+              🔌 Test Connection
+            </button>
+          </div>
+
+          <hr class="divider">
+
+          <!-- Destination library and folder -->
+          <div class="form-group">
+            <label for="setting-repo-select">Target Seafile Library</label>
+            <select id="setting-repo-select" class="form-control">
+              <option value="">(Connect above to load libraries)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="setting-folder">Destination Folder</label>
+            <input type="text" id="setting-folder" class="form-control" value="/RocketScan">
+            <small class="text-muted">Folder will be created automatically if missing</small>
+          </div>
+
+          <div class="form-check mt-2">
+            <input type="checkbox" id="setting-auto-upload" checked>
+            <label for="setting-auto-upload">Auto-upload scans to Seafile after scanning</label>
+          </div>
+
+          <hr class="divider">
+
+          <!-- Rocketbook Quick-Send Presets Section -->
+          <div class="settings-section">
+            <div class="settings-section-header">
+              <div>
+                <h4 class="settings-subtitle">🚀 Rocketbook Quick-Send Destinations</h4>
+                <p class="text-xs text-muted">Map 1-tap badges to specific Seafile libraries and folders</p>
+              </div>
+              <button type="button" id="btn-add-preset" class="btn btn-secondary btn-sm">➕ Add Preset</button>
+            </div>
+            <div id="presets-config-list" class="presets-config-list mt-2">
+              <!-- Dynamically populated preset rows -->
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-close-settings" class="btn btn-secondary">Cancel</button>
+          <button id="btn-save-settings" class="btn btn-primary">Save Configuration</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Fullscreen Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay" style="display: none;">
+      <div class="spinner"></div>
+      <p id="loading-text">Processing...</p>
+    </div>
+
+  </div>
+
+  <!-- Local jsPDF Bundle -->
+  <script src="/js/jspdf.umd.min.js"></script>
+  <!-- Application Scripts -->
+  <script src="/js/vision.js"></script>
+  <script src="/js/scanner.js"></script>
+  <script src="/js/pdf-builder.js"></script>
+  <script src="/js/storage.js"></script>
+  <script src="/js/seafile-api.js"></script>
+  <script src="/js/app.js"></script>
+
+  <!-- PWA Service Worker Registration -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
+  </script>
+</body>
+</html>

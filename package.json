@@ -1,0 +1,32 @@
+{
+  "name": "rocketscan-seafile",
+  "version": "1.0.0",
+  "description": "RocketScan for Seafile - Cross-platform Rocketbook document scanner with Seafile cloud and PC synchronization",
+  "main": "electron-main.js",
+  "scripts": {
+    "start": "node server.js",
+    "start:desktop": "electron .",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "rocketbook",
+    "scanner",
+    "seafile",
+    "desktop",
+    "electron",
+    "android"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.3.0",
+    "jspdf": "^4.2.1",
+    "multer": "^2.5.0",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "electron": "^45.3.2"
+  }
+}
