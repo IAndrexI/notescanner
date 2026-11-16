@@ -737,6 +737,96 @@ app.get('/api/local-seafile', (req, res) => {
   });
 });
 
+// -------------------------------------------------------------
+// OCR & Handwriting Recognition Engine (Tesseract.js)
+// -------------------------------------------------------------
+let ocrWorker = null;
+async function getOcrWorker() {
+  if (!ocrWorker) {
+    const { createWorker } = require('tesseract.js');
+    ocrWorker = await createWorker('eng');
+  }
+  return ocrWorker;
+}
+
+app.post('/api/ocr', upload.single('image'), async (req, res) => {
+  try {
+    let imageBuffer = null;
+    let region = null;
+
+    if (req.file && req.file.buffer) {
+      imageBuffer = req.file.buffer;
+    } else if (req.body.image) {
+      const base64Data = req.body.image.replace(/^data:image\/\w+;base64,/, '');
+      imageBuffer = Buffer.from(base64Data, 'base64');
+    }
+
+    if (req.body.region) {
+      try {
+        region = typeof req.body.region === 'string' ? JSON.parse(req.body.region) : req.body.region;
+      } catch (e) {}
+    }
+
+    if (!imageBuffer) {
+      return res.status(400).json({ error: 'No image provided for OCR.' });
+    }
+
+    const worker = await getOcrWorker();
+    const options = {};
+    if (region && Number(region.width) > 0 && Number(region.height) > 0) {
+      options.rectangle = {
+        left: Math.max(0, Math.round(Number(region.x || region.left || 0))),
+        top: Math.max(0, Math.round(Number(region.y || region.top || 0))),
+        width: Math.round(Number(region.width)),
+        height: Math.round(Number(region.height))
+      };
+    }
+
+    const result = await worker.recognize(imageBuffer, options);
+    const data = result.data || {};
+
+    // Extract structured lines with bounding boxes and normalized coordinates
+    const lines = (data.lines || []).map(line => {
+      const bbox = line.bbox || {};
+      const x0 = Number(bbox.x0 ?? bbox.left ?? 0);
+      const y0 = Number(bbox.y0 ?? bbox.top ?? 0);
+      const x1 = Number(bbox.x1 ?? (x0 + (bbox.width || 0)));
+      const y1 = Number(bbox.y1 ?? (y0 + (bbox.height || 0)));
+      const width = x1 - x0;
+      const height = y1 - y0;
+
+      return {
+        text: (line.text || '').trim(),
+        confidence: line.confidence || 0,
+        bbox: { x0, y0, x1, y1, width, height },
+        words: (line.words || []).map(w => ({
+          text: (w.text || '').trim(),
+          confidence: w.confidence || 0,
+          bbox: {
+            x0: w.bbox?.x0 || 0,
+            y0: w.bbox?.y0 || 0,
+            x1: w.bbox?.x1 || 0,
+            y1: w.bbox?.y1 || 0,
+            width: (w.bbox?.x1 || 0) - (w.bbox?.x0 || 0),
+            height: (w.bbox?.y1 || 0) - (w.bbox?.y0 || 0)
+          }
+        }))
+      };
+    }).filter(l => l.text.length > 0);
+
+    res.json({
+      success: true,
+      text: data.text || '',
+      confidence: data.confidence || 0,
+      lines,
+      region: options.rectangle || null
+    });
+  } catch (err) {
+    console.error('OCR recognition error:', err);
+    res.status(500).json({ error: 'OCR processing failed: ' + err.message });
+  }
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   const localIp = getLocalIp();
   console.log(`=======================================================`);

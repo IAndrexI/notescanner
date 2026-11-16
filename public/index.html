@@ -8,6 +8,9 @@
   <meta name="theme-color" content="#0f172a">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@500;700&family=Merriweather:wght@400;700&family=Patrick+Hand&display=swap">
   <link rel="stylesheet" href="/css/styles.css">
 </head>
 <body>
@@ -133,7 +136,10 @@
       <section id="view-filter" class="view-screen">
         <div class="filter-header">
           <button id="btn-filter-back" class="btn-icon">← Adjust Corners</button>
-          <button id="btn-rotate-page" class="btn-icon" title="Rotate 90°">🔄 Rotate</button>
+          <div class="filter-header-right">
+            <button id="btn-ocr-convert" class="btn-icon btn-accent" title="Convert handwriting to digital font while keeping drawings intact">✍️ Convert Text</button>
+            <button id="btn-rotate-page" class="btn-icon" title="Rotate 90°">🔄 Rotate</button>
+          </div>
         </div>
 
         <div class="filter-stage">
@@ -473,6 +479,90 @@
       </div>
     </div>
 
+    <!-- Handwriting to Text Converter Modal -->
+    <div id="modal-handwriting-converter" class="modal-backdrop modal-fullscreen">
+      <div class="modal-dialog modal-dialog-fullscreen">
+        <div class="modal-header">
+          <div class="header-title-row">
+            <h3>✍️ Handwriting to Text Converter</h3>
+            <span class="badge-hint">Preserves diagrams & drawings intact</span>
+          </div>
+          <button class="btn-close" id="btn-close-ocr">×</button>
+        </div>
+
+        <!-- Top Instruction Bar -->
+        <div class="ocr-instruction-bar">
+          <span class="ocr-tip">💡 Drag a box on any handwritten area to convert it, or choose <strong>Convert All Page</strong>. Sketches & drawings remain untouched!</span>
+          <div class="ocr-top-actions">
+            <button id="btn-clear-selection" class="btn-text btn-xs" style="display: none;">✕ Clear Area</button>
+            <button id="btn-revert-handwriting" class="btn btn-secondary btn-xs">🔄 Revert Original</button>
+          </div>
+        </div>
+
+        <!-- Main Canvas Stage with Selection Layer -->
+        <div class="ocr-stage-wrapper">
+          <div id="ocr-stage-container" class="ocr-stage-container">
+            <!-- Dynamic working canvas and overlay canvas injected here -->
+          </div>
+        </div>
+
+        <!-- Bottom Font & Action Controls -->
+        <div class="ocr-controls-panel">
+          <div class="ocr-controls-row">
+            <!-- Selection Mode & Convert Triggers -->
+            <div class="ocr-action-triggers">
+              <button id="btn-convert-selected" class="btn btn-primary btn-sm" disabled>
+                🔲 Convert Selected Area
+              </button>
+              <button id="btn-convert-all" class="btn btn-secondary btn-sm">
+                📄 Convert All Page
+              </button>
+            </div>
+
+            <!-- Font Family Picker -->
+            <div class="ocr-font-group">
+              <label for="ocr-font-family">Font:</label>
+              <select id="ocr-font-family" class="form-control form-control-sm">
+                <option value="'Patrick Hand', cursive">✍️ Neat Print (Patrick Hand)</option>
+                <option value="'Caveat', cursive">✒️ Cursive Script (Caveat)</option>
+                <option value="'Inter', sans-serif">🔤 Clean Sans (Inter)</option>
+                <option value="'Merriweather', serif">📜 Classic Serif (Merriweather)</option>
+                <option value="'JetBrains Mono', monospace">💻 Clean Mono (JetBrains)</option>
+              </select>
+            </div>
+
+            <!-- Font Color Picker -->
+            <div class="ocr-color-group">
+              <label>Ink Color:</label>
+              <div class="color-swatches">
+                <button class="color-swatch active" data-color="#0f172a" style="background: #0f172a;" title="Ink Charcoal"></button>
+                <button class="color-swatch" data-color="#1d4ed8" style="background: #1d4ed8;" title="Pen Blue"></button>
+                <button class="color-swatch" data-color="#475569" style="background: #475569;" title="Pencil Graphite"></button>
+                <button class="color-swatch" data-color="#7c3aed" style="background: #7c3aed;" title="Ink Purple"></button>
+                <button class="color-swatch" data-color="#b91c1c" style="background: #b91c1c;" title="Dark Crimson"></button>
+              </div>
+            </div>
+
+            <!-- Font Size Scaling -->
+            <div class="ocr-size-group">
+              <label for="ocr-size-slider">Font Size: <span id="ocr-size-val">95%</span></label>
+              <input type="range" id="ocr-size-slider" min="70" max="140" value="95" step="5">
+            </div>
+          </div>
+
+          <!-- Finalize and Export -->
+          <div class="ocr-footer-row">
+            <button id="btn-copy-transcribed" class="btn btn-secondary btn-sm" title="Copy recognized text to clipboard">
+              📋 Copy Text
+            </button>
+            <button id="btn-apply-handwriting" class="btn btn-primary">
+              <span>✓ Apply Font to Document</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- iOS Add to Home Screen (A2HS) Helper Banner -->
     <div id="ios-a2hs-banner" class="ios-a2hs-banner" style="display: none;">
       <div class="ios-a2hs-content">
@@ -507,6 +597,7 @@
   <script src="/js/pdf-builder.js"></script>
   <script src="/js/storage.js"></script>
   <script src="/js/seafile-api.js"></script>
+  <script src="/js/handwriting-converter.js"></script>
   <script src="/js/updater.js"></script>
   <script src="/js/app.js"></script>
 

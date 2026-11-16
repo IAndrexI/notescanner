@@ -38,6 +38,7 @@ const state = {
 const vision = new VisionEngine();
 const storage = new StorageManager();
 let cameraScanner = null;
+let handwritingConverter = null;
 
 // Initialize when DOM is loaded
 document.addEventListener('DOMContentLoaded', async () => {
@@ -220,9 +221,62 @@ function initUI() {
     });
   });
   document.getElementById('btn-rotate-page')?.addEventListener('click', handleRotatePage);
+  document.getElementById('btn-ocr-convert')?.addEventListener('click', openHandwritingConverterModal);
   document.getElementById('btn-add-page')?.addEventListener('click', handleAddAnotherPage);
   document.getElementById('btn-finish-doc')?.addEventListener('click', handleFinishDoc);
   document.getElementById('btn-filter-back')?.addEventListener('click', () => switchView('crop'));
+
+  // Handwriting to Digital Font Converter controls
+  document.getElementById('btn-close-ocr')?.addEventListener('click', closeHandwritingConverterModal);
+  document.getElementById('btn-convert-all')?.addEventListener('click', () => handleRunConversion('all'));
+  document.getElementById('btn-convert-selected')?.addEventListener('click', () => handleRunConversion('selected'));
+  document.getElementById('btn-clear-selection')?.addEventListener('click', () => handwritingConverter?.clearSelection());
+  document.getElementById('btn-revert-handwriting')?.addEventListener('click', () => {
+    handwritingConverter?.revertAll();
+    showToast('Reverted to original document', 'info');
+  });
+  document.getElementById('ocr-font-family')?.addEventListener('change', (e) => {
+    handwritingConverter?.updateSettings({ fontFamily: e.target.value });
+  });
+  document.querySelectorAll('.color-swatch').forEach(swatch => {
+    swatch.addEventListener('click', (e) => {
+      document.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('active'));
+      e.currentTarget.classList.add('active');
+      const color = e.currentTarget.dataset.color;
+      handwritingConverter?.updateSettings({ color });
+    });
+  });
+  const sizeSlider = document.getElementById('ocr-size-slider');
+  const sizeValLabel = document.getElementById('ocr-size-val');
+  if (sizeSlider) {
+    sizeSlider.addEventListener('input', (e) => {
+      const val = Number(e.target.value);
+      if (sizeValLabel) sizeValLabel.textContent = `${val}%`;
+      handwritingConverter?.updateSettings({ sizeScale: val / 100 });
+    });
+  }
+  document.getElementById('btn-copy-transcribed')?.addEventListener('click', () => {
+    const text = handwritingConverter?.getFullTranscribedText() || '';
+    if (!text) {
+      showToast('No text transcribed yet.', 'info');
+      return;
+    }
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(() => {
+        showToast('Transcribed text copied to clipboard!', 'success');
+      }).catch(() => {
+        showToast('Text copied!', 'info');
+      });
+    } else {
+      showToast('Text copied!', 'info');
+    }
+  });
+  document.getElementById('btn-apply-handwriting')?.addEventListener('click', () => {
+    if (!handwritingConverter) return;
+    handwritingConverter.applyToDocument();
+    closeHandwritingConverterModal();
+    showToast('✓ Applied digital font to document!', 'success');
+  });
 
   // Multi-format Export Dropdown on Review Screen
   const exportDropdownBtn = document.getElementById('btn-export-dropdown');
@@ -639,6 +693,72 @@ function handleRotatePage() {
 
   state.rawWarpedCanvas = rotCanvas;
   applySelectedFilter(state.activeFilter);
+}
+
+// -------------------------------------------------------------
+// Handwriting to Digital Font Converter
+// -------------------------------------------------------------
+function openHandwritingConverterModal() {
+  if (!state.activePageCanvas) {
+    showToast('Please capture and adjust a page first.', 'info');
+    return;
+  }
+
+  const stageContainer = document.getElementById('ocr-stage-container');
+  const modal = document.getElementById('modal-handwriting-converter');
+  if (!stageContainer || !modal) return;
+
+  if (!handwritingConverter) {
+    handwritingConverter = new HandwritingConverter();
+  }
+
+  handwritingConverter.init(stageContainer, state.activePageCanvas, (updatedCanvas, transcribedText) => {
+    // When applied, update current active page
+    state.activePageCanvas = updatedCanvas;
+    state.lastTranscribedText = transcribedText;
+    const previewImg = document.getElementById('filter-preview-img');
+    if (previewImg) {
+      previewImg.src = updatedCanvas.toDataURL('image/jpeg', 0.95);
+    }
+  });
+
+  // Enable/disable "Convert Selected" button when user selects an area
+  const btnConvertSelected = document.getElementById('btn-convert-selected');
+  const btnClearSelection = document.getElementById('btn-clear-selection');
+  
+  const origRenderOverlay = handwritingConverter.renderOverlay.bind(handwritingConverter);
+  handwritingConverter.renderOverlay = function() {
+    origRenderOverlay();
+    const hasSelection = Boolean(this.selectedBox && this.selectedBox.width > 20 && this.selectedBox.height > 20);
+    if (btnConvertSelected) btnConvertSelected.disabled = !hasSelection;
+    if (btnClearSelection) btnClearSelection.style.display = hasSelection ? 'inline-block' : 'none';
+  };
+
+  modal.classList.add('active');
+}
+
+function closeHandwritingConverterModal() {
+  const modal = document.getElementById('modal-handwriting-converter');
+  if (modal) modal.classList.remove('active');
+  const inlineEditor = document.getElementById('ocr-inline-editor');
+  if (inlineEditor) inlineEditor.remove();
+}
+
+async function handleRunConversion(mode) {
+  if (!handwritingConverter) return;
+  try {
+    showLoading(mode === 'selected' ? 'Recognizing handwritten area...' : 'Recognizing page handwriting...');
+    const result = await handwritingConverter.processConversion(mode);
+    hideLoading();
+    if (result.count === 0) {
+      showToast('No handwriting detected in this area. Drawings were preserved!', 'info');
+    } else {
+      showToast(`✓ Converted ${result.count} text line${result.count > 1 ? 's' : ''} to digital font! Drawings preserved.`, 'success');
+    }
+  } catch (err) {
+    hideLoading();
+    showToast('OCR Error: ' + err.message, 'error');
+  }
 }
 
 function handleAddAnotherPage() {

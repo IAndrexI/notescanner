@@ -1,4 +1,4 @@
-const CACHE_NAME = 'rocketscan-v3';
+const CACHE_NAME = 'notescan-v4';
 const ASSETS = [
   '/',
   '/index.html',
@@ -9,6 +9,7 @@ const ASSETS = [
   '/js/scanner.js',
   '/js/export-manager.js',
   '/js/pdf-builder.js',
+  '/js/handwriting-converter.js',
   '/js/seafile-api.js',
   '/js/storage.js',
   '/js/updater.js',
