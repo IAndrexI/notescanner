@@ -34,7 +34,7 @@ fi
 cp "${INITD_FILE}" /etc/init.d/notescan
 chmod +x /etc/init.d/notescan
 rc-update add notescan default
-rc-service notesan restart 2>/dev/null || rc-service notescan restart
+rc-service notescan restart
 
 IP_ADDR=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7}' || hostname -i)
 echo "=========================================================="
