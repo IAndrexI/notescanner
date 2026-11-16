@@ -26,8 +26,30 @@ A high-performance document scanner inspired by **Rocketbook**, built for **Andr
 
 ## 🖥️ Running on a Proxmox VE Server
 
-### Method A: Docker Compose (Recommended)
-Inside any Docker LXC or VM on Proxmox:
+### Method A: Ultra-Lightweight Alpine Linux LXC (Recommended ⭐)
+* **RAM footprint:** ~20 MB - 30 MB idle
+* **Disk footprint:** < 100 MB total
+* **Boot time:** < 1 second
+
+1. In Proxmox GUI, go to your storage -> **CT Templates** -> **Templates** -> download **`alpine-3.21`** (or 3.20).
+2. Click **Create CT**:
+   * **Template:** Alpine Linux
+   * **Disks:** 2 GB is plenty
+   * **CPU:** 1 Core
+   * **Memory:** 256 MB
+3. Start the container, open its **Console**, and run:
+
+```sh
+apk add --no-cache git
+git clone https://github.com/IAndrexI/notescanner.git /tmp/notescanner
+chmod +x /tmp/notescanner/proxmox/install-alpine.sh
+/tmp/notescanner/proxmox/install-alpine.sh
+```
+
+---
+
+### Method B: Docker Compose
+If you already have a Docker LXC or VM running in Proxmox:
 
 ```bash
 git clone https://github.com/IAndrexI/notescanner.git
@@ -38,8 +60,8 @@ Your server will be running at `http://<proxmox-ip>:3000` with persistent config
 
 ---
 
-### Method B: Native Proxmox LXC Container (Debian/Ubuntu)
-Create a standard Debian 12 or Ubuntu 24.04 unprivileged LXC container in Proxmox, open its console, and run:
+### Method C: Debian / Ubuntu LXC Container
+Inside a standard Debian 12 or Ubuntu 24.04 LXC container:
 
 ```bash
 git clone https://github.com/IAndrexI/notescanner.git /tmp/notescanner
@@ -47,7 +69,6 @@ cd /tmp/notescanner/proxmox
 chmod +x install-lxc.sh
 ./install-lxc.sh
 ```
-This automatically installs Node.js, sets up `/opt/notescanner`, creates the `notescanner.service` systemd unit, and enables it on boot!
 
 ---
 

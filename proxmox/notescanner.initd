@@ -1,0 +1,24 @@
+#!/sbin/openrc-run
+
+name="notescanner"
+description="NoteScanner (RocketScan for Seafile)"
+command="/usr/bin/node"
+command_args="/opt/notescanner/server.js"
+command_user="root"
+directory="/opt/notescanner"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/notescanner.log"
+error_log="/var/log/notescanner.err"
+
+depend() {
+    need net
+    after firewall
+}
+
+start_pre() {
+    export PORT="${PORT:-3000}"
+    export NODE_ENV=production
+    export DATA_DIR="${DATA_DIR:-/opt/notescanner/data}"
+    mkdir -p /opt/notescanner/data
+}
