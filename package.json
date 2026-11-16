@@ -1,7 +1,7 @@
 {
-  "name": "rocketscan-seafile",
+  "name": "notescan",
   "version": "1.0.0",
-  "description": "RocketScan for Seafile - Cross-platform Rocketbook document scanner with Seafile cloud and PC synchronization",
+  "description": "NoteScan for Seafile - Cross-platform Rocketbook document scanner with Seafile cloud and PC synchronization",
   "main": "electron-main.js",
   "scripts": {
     "start": "node server.js",

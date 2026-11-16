@@ -1,4 +1,4 @@
-# NoteScanner 🚀
+# NoteScan 🚀
 
 A high-performance document scanner inspired by **Rocketbook**, built for **Android, Windows, Linux, and Proxmox VE servers** with instant 1-tap backup to your **Seafile Cloud Server**.
 

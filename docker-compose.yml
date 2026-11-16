@@ -1,7 +1,7 @@
 services:
   rocketscan:
     build: .
-    container_name: notescanner
+    container_name: notescan
     restart: unless-stopped
     ports:
       - "3000:3000"

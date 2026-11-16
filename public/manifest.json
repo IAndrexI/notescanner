@@ -1,6 +1,6 @@
 {
-  "name": "RocketScan for Seafile",
-  "short_name": "RocketScan",
+  "name": "NoteScan for Seafile",
+  "short_name": "NoteScan",
   "description": "Rocketbook-style document scanner with instant Seafile cloud backup & PC viewing",
   "start_url": "/",
   "display": "standalone",
