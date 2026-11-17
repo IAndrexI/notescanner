@@ -76,7 +76,47 @@
     }
 
     static _normalizeServerUrl(url) {
-      return (url || '').trim().replace(/\/+$/, '');
+      const trimmed = (url || '').trim().replace(/\/+$/, '');
+      if (!trimmed) return '';
+      if (!/^https?:\/\//i.test(trimmed)) {
+        return `https://${trimmed}`;
+      }
+      return trimmed;
+    }
+
+    /**
+     * Sanitize Seafile transfer URLs (upload-link / file download links) returned by Seafile API.
+     * If the returned URL uses http:// or has a hostname/host mismatch against serverUrl,
+     * rewrite it to https://${cleanUrlHost}/seafhttp/... so outside-network transfers succeed securely.
+     */
+    static _sanitizeUploadUrl(rawUrl, serverUrl) {
+      if (!rawUrl || typeof rawUrl !== 'string') return '';
+      const trimmed = rawUrl.trim();
+      if (!trimmed) return '';
+
+      const cleanServer = SeafileApi._normalizeServerUrl(serverUrl);
+      if (!cleanServer) return trimmed;
+
+      try {
+        const baseParsed = new URL(cleanServer);
+        const cleanUrlHost = baseParsed.host;
+        const targetParsed = new URL(trimmed, baseParsed.origin);
+
+        const usesHttp = targetParsed.protocol === 'http:';
+        const hostMismatch = targetParsed.hostname !== baseParsed.hostname || targetParsed.host !== baseParsed.host;
+
+        if (usesHttp || hostMismatch) {
+          let pathname = targetParsed.pathname || '/';
+          if (!pathname.startsWith('/seafhttp/') && pathname !== '/seafhttp') {
+            pathname = `/seafhttp${pathname.startsWith('/') ? pathname : `/${pathname}`}`;
+          }
+          return `https://${cleanUrlHost}${pathname}${targetParsed.search}${targetParsed.hash}`;
+        }
+
+        return targetParsed.toString();
+      } catch (e) {
+        return trimmed;
+      }
     }
 
     static _normalizeFolder(folder) {
@@ -712,7 +752,9 @@
                 const resolvedData = await resolveRes.json();
                 const link = resolvedData.upload_link || resolvedData.link;
                 if (link && typeof link === 'string') {
-                  targetUploadUrl = link.trim();
+                  targetUploadUrl = origin.startsWith('https://')
+                    ? SeafileApi._sanitizeUploadUrl(link, origin)
+                    : link.trim();
                   break;
                 }
               }
@@ -848,6 +890,7 @@
           if (!uploadUrl) {
             throw new Error('Seafile returned an empty upload link.');
           }
+          uploadUrl = SeafileApi._sanitizeUploadUrl(uploadUrl, cleanUrl);
 
           const formData = new FormData();
           formData.append('file', fileBlob, finalName);
@@ -989,7 +1032,8 @@
             throw new Error(msg);
           }
           const text = await res.text();
-          return text.replace(/^"|"$/g, '').trim();
+          const rawFileUrl = text.replace(/^"|"$/g, '').trim();
+          return SeafileApi._sanitizeUploadUrl(rawFileUrl, cleanUrl);
         } catch (directErr) {
           if (!SeafileApi._isNetworkError(directErr)) {
             throw directErr;

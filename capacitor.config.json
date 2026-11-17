@@ -1,5 +1,10 @@
 {
   "appId": "com.notescan.app",
   "appName": "NoteScan",
-  "webDir": "public"
+  "webDir": "public",
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
+  }
 }

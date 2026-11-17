@@ -16,18 +16,20 @@ assert(indexHtml.includes('id="btn-camera-direct"'), 'index.html must have #btn-
 assert(indexHtml.includes('id="camera-permission-fallback"'), 'index.html must have camera permission fallback card');
 assert(indexHtml.includes('id="ios-a2hs-banner"'), 'index.html must have iOS Add to Home Screen banner');
 assert(indexHtml.includes('id="btn-close-a2hs"'), 'index.html must have close button for A2HS banner');
-assert(indexHtml.includes('id="btn-export-dropdown"'), 'index.html must have export dropdown button');
-assert(indexHtml.includes('id="export-dropdown-menu"'), 'index.html must have export dropdown menu');
-assert(indexHtml.includes('data-export="pdf"'), 'dropdown must have pdf export option');
-assert(indexHtml.includes('data-export="jpeg"'), 'dropdown must have jpeg export option');
-assert(indexHtml.includes('data-export="png"'), 'dropdown must have png export option');
-assert(indexHtml.includes('data-export="webp"'), 'dropdown must have webp export option');
-assert(indexHtml.includes('data-export="zip"'), 'dropdown must have zip export option');
-assert(indexHtml.includes('data-export="share"'), 'dropdown must have share option');
-assert(indexHtml.includes('data-export="qr"'), 'dropdown must have qr option');
-assert(indexHtml.includes('id="save-format-select"'), 'save modal must have format select dropdown');
-assert(indexHtml.includes('id="btn-share-modal"'), 'save modal must have share button');
-assert(indexHtml.includes('id="btn-qr-share-modal"'), 'save modal must have qr share button');
+assert(indexHtml.includes('id="mobile-nav"'), 'index.html must include mobile bottom navigation bar');
+assert(indexHtml.includes('id="mobile-nav-scanner"'), 'mobile nav must include Scan button');
+assert(indexHtml.includes('id="mobile-nav-gallery"'), 'mobile nav must include PC Notes button');
+assert(indexHtml.includes('id="mobile-nav-settings"'), 'mobile nav must include Settings button');
+assert(indexHtml.includes('id="btn-export-pdf"'), 'index.html must have 1-tap Save PDF button');
+assert(indexHtml.includes('id="btn-export-jpeg"'), 'index.html must have 1-tap Save Image button');
+assert(indexHtml.includes('id="btn-export-share"'), 'index.html must have 1-tap Share File button');
+assert(!indexHtml.includes('id="btn-export-dropdown"'), 'nested export dropdown must be removed');
+assert(!indexHtml.includes('id="export-dropdown-menu"'), 'nested export dropdown menu must be removed');
+assert(!indexHtml.includes('id="save-format-select"'), 'multi-format select matrix must be removed');
+assert(indexHtml.includes('id="btn-modal-save-pdf"'), 'save modal must have Save PDF button');
+assert(indexHtml.includes('id="btn-modal-save-image"'), 'save modal must have Save Image button');
+assert(indexHtml.includes('id="btn-modal-share-file"'), 'save modal must have Share File button');
+assert(indexHtml.includes('id="setting-save-gallery"'), 'settings modal must have Save copy to phone gallery toggle');
 assert(indexHtml.includes('id="modal-qr-share"'), 'index.html must have QR Code Direct File Share modal');
 assert(indexHtml.includes('id="qr-share-canvas"'), 'QR modal must have canvas');
 assert(indexHtml.includes('id="qr-share-url-input"'), 'QR modal must have URL input');
@@ -61,7 +63,11 @@ assert(stylesCss.includes('touch-action: manipulation;'), 'styles.css must have 
 assert(stylesCss.includes('overscroll-behavior: none;'), 'styles.css must prevent rubber-banding');
 assert(stylesCss.includes('.ios-a2hs-banner'), 'styles.css must style .ios-a2hs-banner');
 assert(stylesCss.includes('.camera-fallback-card'), 'styles.css must style .camera-fallback-card');
-assert(stylesCss.includes('.export-dropdown-container'), 'styles.css must style export dropdown');
+assert(stylesCss.includes('100dvh'), 'styles.css must support dynamic viewport height (100dvh)');
+assert(stylesCss.includes('safe-area-inset-top'), 'styles.css must support safe-area-inset-top');
+assert(stylesCss.includes('safe-area-inset-bottom'), 'styles.css must support safe-area-inset-bottom');
+assert(stylesCss.includes('.mobile-bottom-nav'), 'styles.css must style .mobile-bottom-nav');
+assert(stylesCss.includes('.export-actions-row'), 'styles.css must style .export-actions-row');
 assert(stylesCss.includes('.qr-share-dialog'), 'styles.css must style QR share modal');
 
 console.log('✓ styles.css iOS touch optimizations and UI styles verified!');
@@ -75,7 +81,12 @@ assert(appJs.includes('handleQrShareNote'), 'app.js must implement handleQrShare
 assert(appJs.includes('handleWebShareNote'), 'app.js must implement handleWebShareNote');
 assert(appJs.includes('btn-camera-direct'), 'app.js must wire up direct camera button');
 assert(appJs.includes('file-camera-direct'), 'app.js must wire up direct camera file input');
-assert(appJs.includes('export-dropdown-menu'), 'app.js must wire up export dropdown');
+assert(appJs.includes('btn-export-pdf'), 'app.js must wire up Save PDF button');
+assert(appJs.includes('btn-export-jpeg'), 'app.js must wire up Save Image button');
+assert(appJs.includes('btn-export-share'), 'app.js must wire up Share File button');
+assert(appJs.includes('mobile-nav-settings'), 'app.js must wire up mobile bottom nav Settings button');
+assert(appJs.includes('saveScanCopyLocally'), 'app.js must implement saveScanCopyLocally for local phone gallery/IndexedDB saving');
+assert(appJs.includes('NoteScanNative'), 'app.js must integrate Android NoteScanNative.saveFileToDevice bridge');
 
 console.log('✓ app.js direct sharing, QR modal, and iOS camera wiring verified!');
 

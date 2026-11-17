@@ -1,4 +1,4 @@
-const CACHE_NAME = 'notescan-v4';
+const CACHE_NAME = 'notescan-v5';
 const ASSETS = [
   '/',
   '/index.html',
@@ -39,8 +39,15 @@ self.addEventListener('activate', (e) => {
 });
 
 self.addEventListener('fetch', (e) => {
-  // Pass through API requests directly to network
-  if (e.request.url.includes('/api/')) {
+  const url = e.request.url || '';
+  // Pass through API, Seafile, cross-origin, and CapacitorHttp interceptor requests directly
+  if (
+    url.includes('/api/') ||
+    url.includes('/api2/') ||
+    url.includes('/seafhttp/') ||
+    url.includes('_capacitor_http_interceptor_') ||
+    !url.startsWith(self.location.origin)
+  ) {
     return;
   }
   e.respondWith(

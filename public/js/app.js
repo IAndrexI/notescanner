@@ -1,16 +1,9 @@
 /**
- * RocketScan Main Application Controller
+ * NoteScan Main Application Controller
  */
 
-// Default Quick-Send Destination Presets
-const DEFAULT_PRESETS = [
-  { id: 'notes', name: 'Notes', repoId: 'c1b2b0d8-da24-439b-8513-efd16263073a', repoName: 'scannednote', folder: '/' },
-  { id: 'work', name: 'Work', repoId: 'c1b2b0d8-da24-439b-8513-efd16263073a', repoName: 'scannednote', folder: '/Work' },
-  { id: 'receipts', name: 'Receipts', repoId: 'c1b2b0d8-da24-439b-8513-efd16263073a', repoName: 'scannednote', folder: '/Receipts' },
-  { id: 'journal', name: 'Journal', repoId: 'c1b2b0d8-da24-439b-8513-efd16263073a', repoName: 'scannednote', folder: '/Journal' }
-];
-
-const DIRECT_LINKS_STORAGE_KEY = 'notescan_direct_links';
+const DESTINATION_URLS_STORAGE_KEY = 'notescan_destination_urls';
+const LEGACY_DIRECT_LINKS_KEY = 'notescan_direct_links';
 
 function escapeHtml(str) {
   return String(str ?? '')
@@ -28,19 +21,20 @@ const state = {
   corners: null, // [TL, TR, BR, BL] coordinates
   activeCornerIndex: null,
   activePageCanvas: null, // Flattened canvas of current page
+  activePageSavedLocally: false,
   activeFilter: 'magic', // 'magic' | 'bw' | 'grayscale' | 'original'
   pages: [], // Array of { id, originalImage, corners, canvas, filter, rotation }
   documentTitle: '',
   seafileConfig: {
     serverUrl: 'https://seafile.protutech.vip',
     hasToken: false,
-    repoId: 'c1b2b0d8-da24-439b-8513-efd16263073a',
-    repoName: 'scannednote',
+    repoId: '',
+    repoName: '',
     folder: '/',
-    autoUpload: true
+    autoUpload: true,
+    saveCopyToGallery: true
   },
-  presets: [...DEFAULT_PRESETS],
-  directLinks: [], // Array of { id, name, url }
+  destinationUrls: [], // Array of { id, name, url } - ONLY user-added destination URLs
   availableRepos: [],
   networkInfo: null,
   seafileFiles: []
@@ -61,21 +55,26 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadSeafileGallery();
 });
 
-async function loadDirectLinks(configLinks = null) {
+async function loadDestinationUrls(configLinks = null) {
   let links = [];
   try {
-    if (typeof storage.getDirectLinks === 'function') {
+    if (typeof storage.getDestinationUrls === 'function') {
+      const storedLinks = await storage.getDestinationUrls();
+      if (Array.isArray(storedLinks) && storedLinks.length > 0) {
+        links = storedLinks;
+      }
+    } else if (typeof storage.getDirectLinks === 'function') {
       const storedLinks = await storage.getDirectLinks();
       if (Array.isArray(storedLinks) && storedLinks.length > 0) {
         links = storedLinks;
       }
     }
   } catch (e) {
-    console.warn('Could not load direct links from IndexedDB:', e);
+    console.warn('Could not load destination URLs from storage:', e);
   }
 
   if (links.length === 0) {
-    const raw = localStorage.getItem(DIRECT_LINKS_STORAGE_KEY);
+    const raw = localStorage.getItem(DESTINATION_URLS_STORAGE_KEY) || localStorage.getItem(LEGACY_DIRECT_LINKS_KEY);
     if (raw) {
       try {
         const parsed = JSON.parse(raw);
@@ -88,36 +87,52 @@ async function loadDirectLinks(configLinks = null) {
     links = configLinks;
   }
 
-  state.directLinks = links
-    .filter(item => item && typeof item === 'object')
-    .map((item, idx) => ({
-      id: item.id || `dl_${Date.now()}_${idx}`,
-      name: String(item.name || '').trim(),
-      url: String(item.url || '').trim()
-    }));
+  if (typeof StorageManager !== 'undefined' && typeof StorageManager.normalizeDestinationUrls === 'function') {
+    state.destinationUrls = StorageManager.normalizeDestinationUrls(links);
+  } else {
+    state.destinationUrls = (Array.isArray(links) ? links : [])
+      .filter(item => item && typeof item === 'object' && String(item.url || '').trim())
+      .map((item, idx) => ({
+        id: item.id || `dest_${Date.now()}_${idx}`,
+        name: String(item.name || '').trim() || `Destination ${idx + 1}`,
+        url: String(item.url || '').trim()
+      }));
+  }
 
-  return state.directLinks;
+  return state.destinationUrls;
 }
 
-async function persistDirectLinks(links) {
-  const normalized = (Array.isArray(links) ? links : [])
-    .filter(item => item && (item.name?.trim() || item.url?.trim()))
-    .map((item, idx) => ({
-      id: item.id || `dl_${Date.now()}_${idx}`,
-      name: String(item.name || 'Direct Link').trim(),
-      url: String(item.url || '').trim()
-    }))
-    .filter(item => item.url.length > 0);
+async function persistDestinationUrls(links) {
+  let normalized;
+  if (typeof StorageManager !== 'undefined' && typeof StorageManager.normalizeDestinationUrls === 'function') {
+    normalized = StorageManager.normalizeDestinationUrls(links);
+  } else {
+    normalized = (Array.isArray(links) ? links : [])
+      .filter(item => item && String(item.url || '').trim())
+      .map((item, idx) => ({
+        id: item.id || `dest_${Date.now()}_${idx}`,
+        name: String(item.name || `Destination ${idx + 1}`).trim(),
+        url: String(item.url || '').trim()
+      }));
+  }
 
-  state.directLinks = normalized;
-  localStorage.setItem(DIRECT_LINKS_STORAGE_KEY, JSON.stringify(normalized));
+  state.destinationUrls = normalized;
+  try {
+    const serialized = JSON.stringify(normalized);
+    localStorage.setItem(DESTINATION_URLS_STORAGE_KEY, serialized);
+    localStorage.setItem(LEGACY_DIRECT_LINKS_KEY, serialized);
+  } catch (e) {}
 
-  if (typeof storage.saveDirectLinks === 'function') {
+  if (typeof storage.saveDestinationUrls === 'function') {
+    try {
+      await storage.saveDestinationUrls(normalized);
+    } catch (e) {
+      console.warn('Could not save destination URLs to storage:', e);
+    }
+  } else if (typeof storage.saveDirectLinks === 'function') {
     try {
       await storage.saveDirectLinks(normalized);
-    } catch (e) {
-      console.warn('Could not save direct links to storage:', e);
-    }
+    } catch (e) {}
   }
 
   return normalized;
@@ -126,6 +141,9 @@ async function persistDirectLinks(links) {
 // Load backend config & network info
 async function loadConfigAndNetwork() {
   try {
+    // Remove any legacy hardcoded preset cache
+    try { localStorage.removeItem('rocketscan_presets'); } catch (e) {}
+
     const [cfgRes, netRes] = await Promise.allSettled([
       SeafileApi.getConfig(),
       SeafileApi.getNetworkInfo()
@@ -134,26 +152,12 @@ async function loadConfigAndNetwork() {
     const cfg = cfgRes.status === 'fulfilled' && cfgRes.value ? cfgRes.value : state.seafileConfig;
     const net = netRes.status === 'fulfilled' ? netRes.value : null;
 
-    state.seafileConfig = { ...state.seafileConfig, ...cfg };
+    const cleanCfg = { ...cfg };
+    delete cleanCfg.presets;
+    state.seafileConfig = { ...state.seafileConfig, ...cleanCfg };
     state.networkInfo = net;
 
-    // Load presets from server, fallback to localStorage, fallback to DEFAULT_PRESETS
-    if (cfg.presets && Array.isArray(cfg.presets) && cfg.presets.length > 0) {
-      state.presets = cfg.presets;
-    } else {
-      const stored = localStorage.getItem('rocketscan_presets');
-      if (stored) {
-        try {
-          state.presets = JSON.parse(stored);
-        } catch (e) {
-          state.presets = [...DEFAULT_PRESETS];
-        }
-      } else {
-        state.presets = [...DEFAULT_PRESETS];
-      }
-    }
-
-    await loadDirectLinks(cfg.directLinks);
+    await loadDestinationUrls(cfg.destinationUrls || cfg.directLinks);
 
     const versionElem = document.getElementById('settings-app-version');
     if (versionElem && cfg.version) {
@@ -273,13 +277,24 @@ async function initCamera() {
 
 // UI Event Handlers & View Navigation
 function initUI() {
-  // Navigation tabs
-  document.getElementById('nav-scanner')?.addEventListener('click', () => switchView('scanner'));
-  document.getElementById('nav-gallery')?.addEventListener('click', () => {
+  // Navigation tabs (Desktop header + Mobile bottom navigation bar)
+  const openGallery = () => {
+    closeSettingsModal();
     switchView('gallery');
     loadSeafileGallery();
-  });
+  };
+  const openScanner = () => {
+    closeSettingsModal();
+    switchView('scanner');
+  };
+
+  document.getElementById('nav-scanner')?.addEventListener('click', openScanner);
+  document.getElementById('nav-gallery')?.addEventListener('click', openGallery);
   document.getElementById('nav-settings')?.addEventListener('click', () => openSettingsModal());
+
+  document.getElementById('mobile-nav-scanner')?.addEventListener('click', openScanner);
+  document.getElementById('mobile-nav-gallery')?.addEventListener('click', openGallery);
+  document.getElementById('mobile-nav-settings')?.addEventListener('click', () => openSettingsModal());
 
   // Smart Seafile URL detection on paste/input
   document.getElementById('setting-server-url')?.addEventListener('input', (e) => {
@@ -389,50 +404,20 @@ function initUI() {
     showToast('Applied digital font to document.', 'success');
   });
 
-  // Multi-format Export Dropdown on Review Screen
-  const exportDropdownBtn = document.getElementById('btn-export-dropdown');
-  const exportDropdownMenu = document.getElementById('export-dropdown-menu');
-  if (exportDropdownBtn && exportDropdownMenu) {
-    exportDropdownBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      exportDropdownMenu.classList.toggle('show');
-    });
-
-    document.querySelectorAll('#export-dropdown-menu .dropdown-item').forEach(item => {
-      item.addEventListener('click', (e) => {
-        exportDropdownMenu.classList.remove('show');
-        const format = e.currentTarget.dataset.export;
-        if (format === 'share') {
-          handleWebShareCurrentDocument();
-        } else if (format === 'qr') {
-          handleOpenQrShareForCurrent();
-        } else {
-          handleDownloadExport(format);
-        }
-      });
-    });
-
-    document.addEventListener('click', (e) => {
-      if (!exportDropdownBtn.contains(e.target)) {
-        exportDropdownMenu.classList.remove('show');
-      }
-    });
-  }
+  // Streamlined 1-Tap Export Buttons on Review Screen
+  document.getElementById('btn-export-pdf')?.addEventListener('click', () => handleDownloadExport('pdf'));
+  document.getElementById('btn-export-jpeg')?.addEventListener('click', () => handleDownloadExport('jpeg'));
+  document.getElementById('btn-export-share')?.addEventListener('click', () => handleWebShareCurrentDocument('pdf'));
 
   // Quick-Send Auto-Send Toggle
   document.getElementById('review-auto-send-toggle')?.addEventListener('change', handleToggleAutoSend);
 
-  // Document Save modal
+  // Document Save & Export modal
   document.getElementById('btn-cancel-save')?.addEventListener('click', closeSaveDocModal);
   document.getElementById('btn-upload-seafile')?.addEventListener('click', handleUploadToSeafile);
-  document.getElementById('btn-download-pdf')?.addEventListener('click', handleDownloadLocalPdf);
-  document.getElementById('btn-share-modal')?.addEventListener('click', () => {
-    const fmt = document.getElementById('save-format-select')?.value || 'pdf';
-    handleWebShareCurrentDocument(fmt);
-  });
-  document.getElementById('btn-qr-share-modal')?.addEventListener('click', () => {
-    handleOpenQrShareForCurrent();
-  });
+  document.getElementById('btn-modal-save-pdf')?.addEventListener('click', () => handleDownloadExport('pdf'));
+  document.getElementById('btn-modal-save-image')?.addEventListener('click', () => handleDownloadExport('jpeg'));
+  document.getElementById('btn-modal-share-file')?.addEventListener('click', () => handleWebShareCurrentDocument('pdf'));
 
   // Direct QR Code Share Modal Controls
   document.getElementById('btn-close-qr-share')?.addEventListener('click', closeQrShareModal);
@@ -445,22 +430,29 @@ function initUI() {
   document.getElementById('btn-test-connection')?.addEventListener('click', handleTestSeafileConnection);
   document.getElementById('btn-save-settings')?.addEventListener('click', handleSaveSettings);
   document.getElementById('seafile-login-form')?.addEventListener('submit', handleSeafileLogin);
-  document.getElementById('btn-add-preset')?.addEventListener('click', handleAddPreset);
-  document.getElementById('btn-add-direct-link')?.addEventListener('click', handleAddDirectLink);
-
-  // Inline Direct Link quick-send bar on Filter/Review screen
-  document.getElementById('btn-send-inline-direct-link')?.addEventListener('click', handleSendInlineDirectLink);
-  document.getElementById('btn-manage-direct-links')?.addEventListener('click', () => {
-    const bar = document.getElementById('inline-direct-link-bar');
-    if (bar) bar.style.display = 'none';
-    openSettingsModal({ focusDirectLinks: true });
+  document.getElementById('btn-add-destination-url')?.addEventListener('click', handleAddDestinationUrl);
+  document.getElementById('new-dest-url')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleAddDestinationUrl();
+    }
+  });
+  document.getElementById('new-dest-name')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      document.getElementById('new-dest-url')?.focus();
+    }
   });
 
   // Close modals on backdrop click
   document.querySelectorAll('.modal-backdrop').forEach(backdrop => {
     backdrop.addEventListener('click', (e) => {
       if (e.target === backdrop) {
-        backdrop.classList.remove('active');
+        if (backdrop.id === 'modal-settings') {
+          closeSettingsModal();
+        } else {
+          backdrop.classList.remove('active');
+        }
       }
     });
   });
@@ -488,16 +480,19 @@ function initUI() {
   setupCropCanvasInteractions();
 }
 
+function syncNavActiveState(activeKey) {
+  document.querySelectorAll('.nav-tab, .mobile-nav-item').forEach(el => el.classList.remove('active'));
+  document.getElementById(`nav-${activeKey}`)?.classList.add('active');
+  document.getElementById(`mobile-nav-${activeKey}`)?.classList.add('active');
+}
+
 function switchView(viewName) {
   state.view = viewName;
   document.querySelectorAll('.view-screen').forEach(el => el.classList.remove('active'));
-  document.querySelectorAll('.nav-tab').forEach(el => el.classList.remove('active'));
+  syncNavActiveState(viewName);
 
   const targetScreen = document.getElementById(`view-${viewName}`);
   if (targetScreen) targetScreen.classList.add('active');
-
-  const navTab = document.getElementById(`nav-${viewName}`);
-  if (navTab) navTab.classList.add('active');
 
   if (viewName === 'scanner') {
     if (cameraScanner && !cameraScanner.isActive) {
@@ -788,6 +783,7 @@ function applySelectedFilter(filterType) {
 
   const filtered = vision.applyFilter(cloneCanvas, filterType);
   state.activePageCanvas = filtered;
+  state.activePageSavedLocally = false;
 
   // Display on preview element
   const previewImg = document.getElementById('filter-preview-img');
@@ -835,6 +831,7 @@ function openHandwritingConverterModal() {
   handwritingConverter.init(stageContainer, state.activePageCanvas, (updatedCanvas, transcribedText) => {
     // When applied, update current active page
     state.activePageCanvas = updatedCanvas;
+    state.activePageSavedLocally = false;
     state.lastTranscribedText = transcribedText;
     const previewImg = document.getElementById('filter-preview-img');
     if (previewImg) {
@@ -884,13 +881,18 @@ async function handleRunConversion(mode) {
 function handleAddAnotherPage() {
   if (!state.activePageCanvas) return;
 
-  // Save current page to batch
-  state.pages.push({
+  const newPage = {
     id: Date.now(),
     canvas: state.activePageCanvas,
-    filter: state.activeFilter
-  });
+    filter: state.activeFilter,
+    _savedLocally: Boolean(state.activePageSavedLocally)
+  };
+  // Save current page to batch
+  state.pages.push(newPage);
+  saveScanCopyLocally([newPage], { title: document.getElementById('save-doc-title')?.value?.trim() || '' }).catch(() => {});
 
+  state.activePageCanvas = null;
+  state.activePageSavedLocally = false;
   updatePageBadge();
   showToast(`Page ${state.pages.length} saved. Scan next page!`, 'success');
   switchView('scanner');
@@ -965,104 +967,89 @@ function closeSaveDocModal() {
   if (modal) modal.classList.remove('active');
 }
 
-// Render Quick Destination Pills (Seafile presets + Direct Upload Links)
+function formatDestinationUrlSubtitle(url) {
+  const clean = String(url || '').trim();
+  if (!clean) return '';
+  try {
+    const parsed = new URL(clean);
+    const pathPart = parsed.pathname && parsed.pathname !== '/' ? parsed.pathname : '';
+    const combined = `${parsed.host}${pathPart}`;
+    return combined.length > 34 ? `${combined.slice(0, 31)}...` : combined;
+  } catch (e) {
+    return clean.length > 34 ? `${clean.slice(0, 31)}...` : clean;
+  }
+}
+
+// Render Quick Destination Pills (ONLY user-added Destination URLs)
 function renderQuickDestinationPills() {
   const containers = [
     { el: document.getElementById('quick-dest-pills'), isReviewBar: true },
     { el: document.getElementById('modal-quick-dest-pills'), isReviewBar: false }
   ];
 
-  containers.forEach(({ el: container, isReviewBar }) => {
+  const urls = Array.isArray(state.destinationUrls)
+    ? state.destinationUrls.filter(item => item && item.url && String(item.url).trim())
+    : [];
+
+  containers.forEach(({ el: container }) => {
     if (!container) return;
     container.innerHTML = '';
 
-    // 1. Seafile destination presets (plain text labels)
-    state.presets.forEach(preset => {
-      const pill = document.createElement('button');
-      pill.type = 'button';
-      pill.className = 'dest-pill';
-      pill.title = `1-Tap Send to ${preset.name} (${preset.folder})`;
-      pill.setAttribute('data-preset-id', preset.id);
-
-      const folderName = preset.folder.split('/').filter(Boolean).pop() || preset.folder;
-      const folderDisplay = folderName === '/' ? '/' : `/${folderName}`;
-      pill.innerHTML = `
-        <span class="dest-pill-name">${escapeHtml(preset.name)}</span>
-        <span class="dest-pill-folder">${escapeHtml(folderDisplay)}</span>
-      `;
-
-      pill.addEventListener('click', (e) => {
+    // Empty state: clean prompt to add a Destination URL
+    if (urls.length === 0) {
+      const promptBtn = document.createElement('button');
+      promptBtn.type = 'button';
+      promptBtn.id = container.id === 'quick-dest-pills' ? 'btn-empty-dest-prompt' : 'btn-modal-empty-dest-prompt';
+      promptBtn.className = 'dest-pill dest-empty-prompt';
+      promptBtn.style.borderStyle = 'dashed';
+      promptBtn.style.color = 'var(--text-muted)';
+      promptBtn.style.width = '100%';
+      promptBtn.style.justifyContent = 'center';
+      promptBtn.textContent = 'No destination URLs configured. Tap to add URL';
+      promptBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        handleQuickSend(preset);
+        closeSaveDocModal();
+        openSettingsModal({ focusDestinationUrls: true });
       });
+      container.appendChild(promptBtn);
+      return;
+    }
 
-      container.appendChild(pill);
-    });
-
-    // 2. Configured Direct Upload Links (1-tap send without Seafile login)
-    (state.directLinks || []).forEach(link => {
-      if (!link || !link.url) return;
+    // Render ONLY user-added Destination URLs as 1-tap pills
+    urls.forEach(dest => {
       const pill = document.createElement('button');
       pill.type = 'button';
       pill.className = 'dest-pill dest-pill-direct';
       pill.style.borderColor = 'var(--accent)';
-      pill.title = `1-Tap Direct Send to ${link.name || link.url}`;
-      pill.setAttribute('data-direct-link-id', link.id);
+      pill.title = `1-Tap Send to ${dest.name || dest.url} (${dest.url})`;
+      pill.setAttribute('data-destination-id', dest.id);
+      pill.setAttribute('data-destination-url', dest.url);
 
+      const subtitle = formatDestinationUrlSubtitle(dest.url);
       pill.innerHTML = `
-        <span class="dest-pill-name">${escapeHtml(link.name || 'Direct Link')}</span>
-        <span class="dest-pill-folder">Direct Link</span>
+        <span class="dest-pill-name">${escapeHtml(dest.name || subtitle)}</span>
+        <span class="dest-pill-folder">${escapeHtml(subtitle)}</span>
       `;
 
       pill.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        handleQuickSendDirectLink(link);
+        handleSendToDestinationUrl(dest);
       });
 
       container.appendChild(pill);
     });
-
-    // 3. Always expose "Direct Link" option on the Filter/Review destination bar
-    if (isReviewBar) {
-      const directActionPill = document.createElement('button');
-      directActionPill.type = 'button';
-      directActionPill.id = 'btn-review-direct-link';
-      directActionPill.className = 'dest-pill';
-      directActionPill.style.borderStyle = 'dashed';
-      directActionPill.title = 'Send directly to any URL or manage Direct Upload Links';
-      directActionPill.innerHTML = `
-        <span class="dest-pill-name">Direct Link</span>
-        <span class="dest-pill-folder">${state.directLinks.length > 0 ? 'Custom URL' : 'Set URL'}</span>
-      `;
-
-      directActionPill.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const bar = document.getElementById('inline-direct-link-bar');
-        const input = document.getElementById('inline-direct-link-url');
-        if (bar) {
-          const isHidden = bar.style.display === 'none' || !bar.style.display;
-          bar.style.display = isHidden ? 'flex' : 'none';
-          if (isHidden && input) input.focus();
-        } else {
-          openSettingsModal({ focusDirectLinks: true });
-        }
-      });
-
-      container.appendChild(directActionPill);
-    }
   });
 }
 
-// 1-Tap Quick-Send to configured Direct Link (no Seafile login required)
-async function handleQuickSendDirectLink(linkOrUrl, customName = '') {
-  const targetUrl = typeof linkOrUrl === 'string' ? linkOrUrl.trim() : String(linkOrUrl?.url || '').trim();
-  const linkName = (typeof linkOrUrl === 'object' ? linkOrUrl?.name : customName) || 'Direct Link';
+// 1-Tap Quick-Send to configured Destination URL (no Seafile login required)
+async function handleSendToDestinationUrl(destOrUrl, customName = '') {
+  const targetUrl = typeof destOrUrl === 'string' ? destOrUrl.trim() : String(destOrUrl?.url || '').trim();
+  const destName = (typeof destOrUrl === 'object' ? destOrUrl?.name : customName) || formatDestinationUrlSubtitle(targetUrl) || 'Destination URL';
 
   if (!targetUrl) {
-    showToast('Please enter a valid direct upload URL.', 'warning');
+    showToast('Please enter a valid destination URL.', 'warning');
     return;
   }
 
@@ -1087,161 +1074,159 @@ async function handleQuickSendDirectLink(linkOrUrl, customName = '') {
     const dateStr = now.toISOString().slice(0, 10);
     const timeStr = String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0') + String(now.getSeconds()).padStart(2, '0');
     const titleInput = document.getElementById('save-doc-title')?.value?.trim();
-    const baseName = titleInput || linkName.replace(/[^a-zA-Z0-9_\-]/g, '_') || 'NoteScan';
+    const baseName = titleInput || destName.replace(/[^a-zA-Z0-9_\-]/g, '_') || 'NoteScan';
     const fileName = `${baseName}_${dateStr}_${timeStr}.pdf`;
 
-    showToast(`Sending to ${linkName}...`, 'info');
-    showLoading(`Compiling PDF and sending to ${linkName}...`);
+    showToast(`Sending to ${destName}...`, 'info');
+    showLoading(`Compiling PDF and sending to ${destName}...`);
 
     const pdfBlob = await PdfBuilder.createPdfFromPages(state.pages);
 
     if (typeof SeafileApi.sendToDirectLink !== 'function') {
-      throw new Error('Direct link upload is not available.');
+      throw new Error('Destination URL upload is not available.');
     }
     await SeafileApi.sendToDirectLink(targetUrl, pdfBlob, fileName);
+    await saveScanCopyLocally(state.pages, { title: baseName });
 
     hideLoading();
     closeSaveDocModal();
 
-    const bar = document.getElementById('inline-direct-link-bar');
-    if (bar) bar.style.display = 'none';
-
-    showToast(`Sent "${fileName}" to ${linkName}.`, 'success');
+    showToast(`Sent "${fileName}" to ${destName}.`, 'success');
 
     // Reset current batch for next scan
     state.pages = [];
     state.activePageCanvas = null;
     updatePageBadge();
-  } catch (err) {
-    hideLoading();
-    showToast('Direct upload error: ' + err.message, 'error');
-  }
-}
-
-async function handleSendInlineDirectLink() {
-  const input = document.getElementById('inline-direct-link-url');
-  const url = input?.value.trim() || '';
-  if (!url) {
-    showToast('Please enter a direct upload URL.', 'warning');
-    input?.focus();
-    return;
-  }
-  await handleQuickSendDirectLink(url, 'Direct Link');
-}
-
-// 1-Tap Quick-Send to destination preset with zero extra clicks
-async function handleQuickSend(preset) {
-  if (!state.seafileConfig.serverUrl || !state.seafileConfig.hasToken) {
-    showToast('Please configure your Seafile server connection in Settings first.', 'warning');
-    closeSaveDocModal();
-    openSettingsModal();
-    return;
-  }
-
-  // Include active page if present
-  if (state.activePageCanvas) {
-    state.pages.push({
-      id: Date.now(),
-      canvas: state.activePageCanvas,
-      filter: state.activeFilter
-    });
-    state.activePageCanvas = null;
-    updatePageBadge();
-  }
-
-  if (state.pages.length === 0) {
-    showToast('Please scan or import at least one page first.', 'info');
-    return;
-  }
-
-  const targetRepoId = preset.repoId || state.seafileConfig.repoId;
-  const targetFolder = preset.folder || state.seafileConfig.folder || '/RocketScan';
-
-  if (!targetRepoId) {
-    showToast('Please select a target Seafile library in Settings first.', 'warning');
-    openSettingsModal();
-    return;
-  }
-
-  try {
-    const now = new Date();
-    const dateStr = now.toISOString().slice(0, 10);
-    const timeStr = String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0') + String(now.getSeconds()).padStart(2, '0');
-    const sanitizedName = preset.name.replace(/[^a-zA-Z0-9_\-]/g, '_');
-    const fileName = `${sanitizedName}_${dateStr}_${timeStr}.pdf`;
-
-    showToast(`Sending to ${preset.name} (${targetFolder})...`, 'info');
-    showLoading(`Compiling PDF & 1-tap sending to ${preset.name}...`);
-
-    const pdfBlob = await PdfBuilder.createPdfFromPages(state.pages);
-
-    const uploadRes = await SeafileApi.uploadFile(
-      pdfBlob,
-      fileName,
-      targetRepoId,
-      targetFolder
-    );
-
-    hideLoading();
-    closeSaveDocModal();
-
-    const cleanFolder = targetFolder.replace(/^\/+|\/+$/g, '');
-    const cleanPath = cleanFolder ? `${cleanFolder}/${fileName}` : fileName;
-    const viewUrl = uploadRes.viewUrl || (state.seafileConfig.serverUrl ? `${state.seafileConfig.serverUrl.replace(/\/+$/, '')}/#common/lib/${targetRepoId}/${encodeURIComponent(cleanPath)}` : '');
-
-    // Immediate visual feedback toast with link/button to view in Seafile
-    showToast(`Uploaded "${fileName}" to ${preset.name}.`, 'success', {
-      label: 'View in Seafile',
-      onClick: async () => {
-        try {
-          const directUrl = await SeafileApi.getFileUrl(targetRepoId, `/${cleanPath}`);
-          if (directUrl) {
-            window.open(directUrl, '_blank');
-            return;
-          }
-        } catch (e) {}
-        if (viewUrl) {
-          window.open(viewUrl, '_blank');
-        }
-      }
-    });
-
-    // Reset current batch for next scan
-    state.pages = [];
-    state.activePageCanvas = null;
-    updatePageBadge();
-
-    // Refresh Seafile gallery in background
-    loadSeafileGallery().catch(() => {});
   } catch (err) {
     hideLoading();
     showToast('Upload error: ' + err.message, 'error');
   }
 }
+const handleQuickSendDirectLink = handleSendToDestinationUrl;
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error('Failed to read file data'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function saveBlobToDevice(blob, filename, mimeType = 'application/octet-stream') {
+  if (window.NoteScanNative && typeof window.NoteScanNative.saveFileToDevice === 'function') {
+    const dataUrl = await blobToDataUrl(blob);
+    const rawRes = window.NoteScanNative.saveFileToDevice(dataUrl, filename, mimeType);
+    const parsed = typeof rawRes === 'string' ? JSON.parse(rawRes) : rawRes;
+    if (parsed && parsed.success) {
+      return parsed;
+    }
+    throw new Error(parsed?.error || 'Native save failed');
+  }
+
+  ExportManager.downloadBlob(blob, filename);
+  return { success: true, fileName: filename, location: 'Downloads' };
+}
+
+async function saveScanCopyLocally(pages, options = {}) {
+  const targetPages = Array.isArray(pages) && pages.length > 0 ? pages : collectPagesForExport();
+  if (targetPages.length === 0) return [];
+
+  const shouldDownloadToGallery = state.seafileConfig.saveCopyToGallery !== false && !options.skipDownload;
+  const now = new Date();
+  const dateStr = now.toISOString().slice(0, 10);
+  const timeStr = String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0') + String(now.getSeconds()).padStart(2, '0');
+  const baseTitle = ExportManager.sanitizeFilename(options.title || `NoteScan_${dateStr}_${timeStr}`);
+
+  const savedResults = [];
+  for (let idx = 0; idx < targetPages.length; idx++) {
+    const page = targetPages[idx];
+    if (!page || !page.canvas) continue;
+    if (!options.force && (page._savedLocally || (page.canvas === state.activePageCanvas && state.activePageSavedLocally))) {
+      continue;
+    }
+
+    try {
+      const imgRes = await ExportManager.createImage(page.canvas, 'jpeg', {
+        title: baseTitle,
+        pageNumber: targetPages.length > 1 ? idx + 1 : undefined,
+        quality: 0.95
+      });
+
+      const dataUrl = page.canvas.toDataURL('image/jpeg', 0.95);
+      if (typeof storage.saveDocument === 'function') {
+        await storage.saveDocument({
+          id: `scan_${page.id || Date.now()}_${idx}`,
+          title: imgRes.filename,
+          createdAt: Date.now(),
+          pageCount: 1,
+          filter: page.filter || state.activeFilter || 'magic',
+          mimeType: 'image/jpeg',
+          size: imgRes.size,
+          imageDataUrl: dataUrl
+        });
+      }
+
+      if (shouldDownloadToGallery) {
+        await saveBlobToDevice(imgRes.blob, imgRes.filename, 'image/jpeg');
+      }
+
+      page._savedLocally = true;
+      if (page.canvas === state.activePageCanvas) {
+        state.activePageSavedLocally = true;
+      }
+      savedResults.push(imgRes);
+    } catch (err) {
+      console.warn('Could not save local JPEG copy:', err);
+    }
+  }
+  return savedResults;
+}
+
+function collectPagesForExport() {
+  const pagesToExport = [...state.pages];
+  if (state.activePageCanvas) {
+    pagesToExport.push({
+      id: Date.now(),
+      canvas: state.activePageCanvas,
+      filter: state.activeFilter,
+      _savedLocally: Boolean(state.activePageSavedLocally)
+    });
+  }
+  return pagesToExport;
+}
 
 async function handleDownloadExport(format = 'pdf', options = {}) {
   try {
-    const fmt = format.toUpperCase();
-    showLoading(`Exporting document as ${fmt}...`);
-    const title = (document.getElementById('save-doc-title')?.value || 'Scanned_Notes').trim();
+    const fmt = format.toLowerCase();
+    showLoading(`Exporting document as ${fmt.toUpperCase()}...`);
+    const now = new Date();
+    const dateStr = now.toISOString().slice(0, 10);
+    const timeStr = String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0');
+    const title = (document.getElementById('save-doc-title')?.value || `Notes_${dateStr}_${timeStr}`).trim();
 
-    // Ensure active page is included if state.pages is empty
-    let pagesToExport = [...state.pages];
-    if (state.activePageCanvas && pagesToExport.length === 0) {
-      pagesToExport.push({
-        id: Date.now(),
-        canvas: state.activePageCanvas,
-        filter: state.activeFilter
-      });
-    }
-
+    const pagesToExport = collectPagesForExport();
     if (pagesToExport.length === 0) {
       hideLoading();
       showToast('No pages available to export', 'warning');
       return;
     }
 
-    const result = await ExportManager.downloadDocument(pagesToExport, format, {
+    if (fmt === 'jpeg' || fmt === 'jpg') {
+      const savedImgs = await saveScanCopyLocally(pagesToExport, {
+        title,
+        force: true,
+        skipDownload: false
+      });
+      if (savedImgs.length === 0) {
+        throw new Error('Could not generate JPEG image');
+      }
+      hideLoading();
+      showToast(`Saved ${savedImgs.length > 1 ? `${savedImgs.length} images` : savedImgs[0].filename} to device!`, 'success');
+      return savedImgs[0];
+    }
+
+    const result = await ExportManager.exportDocument(pagesToExport, format, {
       title,
       pageSize: options.pageSize || 'a4',
       orientation: options.orientation || 'auto',
@@ -1249,8 +1234,11 @@ async function handleDownloadExport(format = 'pdf', options = {}) {
       ...options
     });
 
+    await saveBlobToDevice(result.blob, result.filename, result.mimeType);
+    await saveScanCopyLocally(pagesToExport, { title });
+
     hideLoading();
-    showToast(`Exported ${result.filename} successfully!`, 'success');
+    showToast(`Saved ${result.filename} successfully!`, 'success');
     return result;
   } catch (err) {
     hideLoading();
@@ -1260,8 +1248,7 @@ async function handleDownloadExport(format = 'pdf', options = {}) {
 }
 
 async function handleDownloadLocalPdf() {
-  const fmt = document.getElementById('save-format-select')?.value || 'pdf';
-  return handleDownloadExport(fmt);
+  return handleDownloadExport('pdf');
 }
 window.handleDownloadExport = handleDownloadExport;
 
@@ -1270,17 +1257,8 @@ window.handleDownloadExport = handleDownloadExport;
 // -------------------------------------------------------------
 async function handleWebShareCurrentDocument(format = 'pdf') {
   try {
-    if (state.activePageCanvas) {
-      state.pages.push({
-        id: Date.now(),
-        canvas: state.activePageCanvas,
-        filter: state.activeFilter
-      });
-      state.activePageCanvas = null;
-      updatePageBadge();
-    }
-
-    if (state.pages.length === 0) {
+    const pagesToShare = collectPagesForExport();
+    if (pagesToShare.length === 0) {
       showToast('Please scan at least one page first.', 'info');
       return;
     }
@@ -1288,7 +1266,8 @@ async function handleWebShareCurrentDocument(format = 'pdf') {
     const title = (document.getElementById('save-doc-title')?.value || 'Scanned_Notes').trim();
     showLoading(`Preparing ${format.toUpperCase()} for sharing...`);
 
-    const result = await ExportManager.exportDocument(state.pages, format, { title });
+    await saveScanCopyLocally(pagesToShare, { title });
+    const result = await ExportManager.exportDocument(pagesToShare, format, { title });
     hideLoading();
 
     const file = new File([result.blob], result.filename, { type: result.mimeType });
@@ -1306,7 +1285,7 @@ async function handleWebShareCurrentDocument(format = 'pdf') {
     if (navigator.share) {
       await navigator.share({
         title: title,
-        text: `RocketScan: ${title}`
+        text: `NoteScan: ${title}`
       });
       showToast('Shared via system share!', 'success');
       return;
@@ -1315,7 +1294,7 @@ async function handleWebShareCurrentDocument(format = 'pdf') {
     // Fallback: Open QR share modal
     openQrShareModal({
       title: result.filename,
-      info: 'AirDrop / Web Share file sharing is not supported in this browser. Use QR code or download directly.'
+      info: 'System file sharing is not supported in this browser. Use QR code or download directly.'
     });
   } catch (err) {
     hideLoading();
@@ -1516,7 +1495,7 @@ async function handleUploadToSeafile() {
   }
 
   const targetRepoId = state.seafileConfig.repoId;
-  const targetFolder = state.seafileConfig.folder || '/RocketScan';
+  const targetFolder = state.seafileConfig.folder || '/';
 
   if (!targetRepoId) {
     showToast('Please select a target Seafile library in Settings first.', 'warning');
@@ -1541,6 +1520,7 @@ async function handleUploadToSeafile() {
       targetRepoId,
       targetFolder
     );
+    await saveScanCopyLocally(state.pages, { title });
 
     hideLoading();
     closeSaveDocModal();
@@ -1751,23 +1731,29 @@ function openSettingsModal(options = {}) {
   const modal = document.getElementById('modal-settings');
   if (!modal) return;
 
+  syncNavActiveState('settings');
+
   const urlInput = document.getElementById('setting-server-url');
   const tokenInput = document.getElementById('setting-token');
   const folderInput = document.getElementById('setting-folder');
   const autoUploadCheck = document.getElementById('setting-auto-upload');
+  const saveGalleryCheck = document.getElementById('setting-save-gallery');
 
   if (urlInput) urlInput.value = state.seafileConfig.serverUrl || 'https://seafile.protutech.vip';
   if (tokenInput) tokenInput.value = '';
   if (folderInput) folderInput.value = state.seafileConfig.folder || '/';
   if (autoUploadCheck) autoUploadCheck.checked = state.seafileConfig.autoUpload;
+  if (saveGalleryCheck) saveGalleryCheck.checked = state.seafileConfig.saveCopyToGallery !== false;
 
-  renderDirectLinksSettingsList();
-  renderPresetsSettingsList();
+  renderDestinationUrlsList();
 
   modal.classList.add('active');
 
-  if (options.focusDirectLinks) {
-    document.getElementById('settings-direct-links-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (options.focusDestinationUrls || options.focusDirectLinks) {
+    document.getElementById('settings-destination-urls-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setTimeout(() => {
+      document.getElementById('new-dest-url')?.focus();
+    }, 150);
   }
 
   if (state.seafileConfig.hasToken && state.seafileConfig.serverUrl) {
@@ -1778,155 +1764,127 @@ function openSettingsModal(options = {}) {
 function closeSettingsModal() {
   const modal = document.getElementById('modal-settings');
   if (modal) modal.classList.remove('active');
+  const activeView = ['scanner', 'gallery'].includes(state.view) ? state.view : 'scanner';
+  syncNavActiveState(activeView);
 }
 
-function collectDirectLinksFromUI() {
-  const cards = document.querySelectorAll('#direct-links-config-list .direct-link-config-card');
+function collectDestinationUrlsFromUI() {
+  const cards = document.querySelectorAll('#destination-urls-list .destination-url-card');
   const collected = [];
   cards.forEach((card, idx) => {
-    const id = card.getAttribute('data-link-id') || `dl_${Date.now()}_${idx}`;
-    const name = card.querySelector('.direct-link-name-input')?.value.trim() || '';
-    const url = card.querySelector('.direct-link-url-input')?.value.trim() || '';
+    const id = card.getAttribute('data-dest-id') || `dest_${Date.now()}_${idx}`;
+    const name = card.querySelector('.dest-url-name-input')?.value.trim() || '';
+    const url = card.querySelector('.dest-url-input')?.value.trim() || '';
     collected.push({ id, name, url });
   });
   return collected;
 }
 
-function renderDirectLinksSettingsList() {
-  const container = document.getElementById('direct-links-config-list');
+function renderDestinationUrlsList() {
+  const container = document.getElementById('destination-urls-list');
   if (!container) return;
 
   container.innerHTML = '';
-  if (!state.directLinks || state.directLinks.length === 0) {
+  if (!state.destinationUrls || state.destinationUrls.length === 0) {
     const emptyMsg = document.createElement('p');
     emptyMsg.className = 'text-xs text-muted';
-    emptyMsg.textContent = 'No direct upload links configured. Click "Add Link" to add a Seafile shared upload link or webhook URL.';
+    emptyMsg.textContent = 'No destination URLs configured yet. Add a URL above to enable 1-tap sending.';
     container.appendChild(emptyMsg);
     return;
   }
 
-  state.directLinks.forEach((link, index) => {
+  state.destinationUrls.forEach((dest, index) => {
     const card = document.createElement('div');
-    card.className = 'preset-config-card direct-link-config-card';
+    card.className = 'preset-config-card destination-url-card';
     card.setAttribute('data-index', index);
-    card.setAttribute('data-link-id', link.id || `dl_${index}`);
+    card.setAttribute('data-dest-id', dest.id || `dest_${index}`);
 
     card.innerHTML = `
       <div class="preset-card-row-top">
-        <input type="text" class="form-control direct-link-name-input" value="${escapeHtml(link.name || '')}" placeholder="Label (e.g. Shared Upload, Webhook)">
-        <button type="button" class="btn-remove-preset btn-remove-direct-link" title="Delete Direct Link">Delete</button>
+        <input type="text" class="form-control preset-name-input dest-url-name-input" value="${escapeHtml(dest.name || '')}" placeholder="Destination Name">
+        <button type="button" class="btn btn-secondary btn-sm btn-save-dest-url" title="Save Destination URL">Save</button>
+        <button type="button" class="btn-remove-preset btn-remove-dest-url" title="Remove Destination URL">Remove</button>
       </div>
       <div class="preset-card-row-bottom">
-        <input type="url" class="form-control direct-link-url-input" value="${escapeHtml(link.url || '')}" placeholder="https://seafile.example.com/u/d/..." title="Direct Upload URL">
+        <input type="url" class="form-control dest-url-input" style="flex: 1;" value="${escapeHtml(dest.url || '')}" placeholder="https://seafile.example.com/u/d/..." title="Destination URL">
       </div>
     `;
 
-    card.querySelector('.btn-remove-direct-link')?.addEventListener('click', () => {
-      state.directLinks = collectDirectLinksFromUI();
-      state.directLinks.splice(index, 1);
-      renderDirectLinksSettingsList();
-    });
-
-    container.appendChild(card);
-  });
-}
-
-function handleAddDirectLink() {
-  if (document.querySelectorAll('#direct-links-config-list .direct-link-config-card').length > 0) {
-    state.directLinks = collectDirectLinksFromUI();
-  }
-  state.directLinks.push({
-    id: 'dl_' + Date.now(),
-    name: `Direct Link ${state.directLinks.length + 1}`,
-    url: ''
-  });
-  renderDirectLinksSettingsList();
-
-  const inputs = document.querySelectorAll('#direct-links-config-list .direct-link-url-input');
-  const lastInput = inputs[inputs.length - 1];
-  if (lastInput) lastInput.focus();
-}
-
-function collectPresetsFromUI() {
-  const presetCards = document.querySelectorAll('#presets-config-list .preset-config-card');
-  const updatedPresets = [];
-  presetCards.forEach((card, idx) => {
-    const name = card.querySelector('.preset-name-input')?.value.trim() || `Preset ${idx + 1}`;
-    const repoSel = card.querySelector('.preset-repo-select');
-    const selectedRepoId = repoSel?.value || '';
-    const selectedRepoName = selectedRepoId && repoSel?.options[repoSel.selectedIndex]
-      ? repoSel.options[repoSel.selectedIndex].text.split(' (')[0]
-      : '';
-    const folderVal = card.querySelector('.preset-folder-input')?.value.trim() || '/RocketScan';
-
-    updatedPresets.push({
-      id: state.presets[idx]?.id || ('preset_' + idx),
-      name,
-      repoId: selectedRepoId,
-      repoName: selectedRepoName,
-      folder: folderVal.startsWith('/') ? folderVal : `/${folderVal}`
-    });
-  });
-  return updatedPresets;
-}
-
-// Render the customizable presets list in the Settings modal
-function renderPresetsSettingsList() {
-  const container = document.getElementById('presets-config-list');
-  if (!container) return;
-
-  container.innerHTML = '';
-  state.presets.forEach((preset, index) => {
-    const card = document.createElement('div');
-    card.className = 'preset-config-card';
-    card.setAttribute('data-index', index);
-
-    // Build repo options
-    let repoOptions = `<option value="">(Default: ${escapeHtml(state.seafileConfig.repoName || 'Primary Library')})</option>`;
-    if (state.availableRepos && state.availableRepos.length > 0) {
-      state.availableRepos.forEach(repo => {
-        const isSelected = (preset.repoId === repo.id) ? 'selected' : '';
-        repoOptions += `<option value="${escapeHtml(repo.id)}" ${isSelected}>${escapeHtml(repo.name)}</option>`;
-      });
-    }
-
-    card.innerHTML = `
-      <div class="preset-card-row-top">
-        <input type="text" class="form-control preset-name-input" value="${escapeHtml(preset.name || '')}" placeholder="Preset Label (e.g. Notes, Work)">
-        <button type="button" class="btn-remove-preset" title="Delete Preset" ${state.presets.length <= 1 ? 'disabled style="opacity:0.4"' : ''}>Delete</button>
-      </div>
-      <div class="preset-card-row-bottom">
-        <select class="form-control preset-repo-select" title="Target Library">
-          ${repoOptions}
-        </select>
-        <input type="text" class="form-control preset-folder-input" value="${escapeHtml(preset.folder || '/RocketScan')}" placeholder="/RocketScan/Folder" title="Destination Subfolder">
-      </div>
-    `;
-
-    card.querySelector('.btn-remove-preset')?.addEventListener('click', () => {
-      if (state.presets.length > 1) {
-        state.presets = collectPresetsFromUI();
-        state.presets.splice(index, 1);
-        renderPresetsSettingsList();
+    const saveRowChanges = async (showFeedback = false) => {
+      const updatedName = card.querySelector('.dest-url-name-input')?.value.trim() || '';
+      const rawUrl = card.querySelector('.dest-url-input')?.value.trim() || '';
+      const cleanUrl = (typeof StorageManager !== 'undefined' && typeof StorageManager.normalizeUrl === 'function')
+        ? StorageManager.normalizeUrl(rawUrl)
+        : rawUrl;
+      if (!cleanUrl) {
+        if (showFeedback) showToast('Destination URL cannot be empty.', 'warning');
+        return;
       }
+      const list = collectDestinationUrlsFromUI();
+      list[index] = {
+        id: dest.id || `dest_${Date.now()}_${index}`,
+        name: updatedName || formatDestinationUrlSubtitle(cleanUrl),
+        url: cleanUrl
+      };
+      await persistDestinationUrls(list);
+      renderQuickDestinationPills();
+      if (showFeedback) {
+        renderDestinationUrlsList();
+        showToast(`Saved "${list[index].name}".`, 'success');
+      }
+    };
+
+    card.querySelector('.btn-save-dest-url')?.addEventListener('click', () => saveRowChanges(true));
+    card.querySelector('.dest-url-name-input')?.addEventListener('change', () => saveRowChanges(false));
+    card.querySelector('.dest-url-input')?.addEventListener('change', () => saveRowChanges(false));
+
+    card.querySelector('.btn-remove-dest-url')?.addEventListener('click', async () => {
+      const list = collectDestinationUrlsFromUI();
+      list.splice(index, 1);
+      await persistDestinationUrls(list);
+      renderDestinationUrlsList();
+      renderQuickDestinationPills();
+      showToast('Removed destination URL.', 'info');
     });
 
     container.appendChild(card);
   });
 }
 
-function handleAddPreset() {
-  if (document.querySelectorAll('#presets-config-list .preset-config-card').length > 0) {
-    state.presets = collectPresetsFromUI();
+async function handleAddDestinationUrl() {
+  const nameInput = document.getElementById('new-dest-name');
+  const urlInput = document.getElementById('new-dest-url');
+  const rawUrl = urlInput?.value.trim() || '';
+  const cleanUrl = (typeof StorageManager !== 'undefined' && typeof StorageManager.normalizeUrl === 'function')
+    ? StorageManager.normalizeUrl(rawUrl)
+    : rawUrl;
+
+  if (!cleanUrl) {
+    showToast('Please enter a destination URL.', 'warning');
+    urlInput?.focus();
+    return;
   }
-  state.presets.push({
-    id: 'preset_' + Date.now(),
-    name: `Custom ${state.presets.length + 1}`,
-    repoId: '',
-    repoName: '',
-    folder: `/RocketScan/Custom`
+
+  const rawName = nameInput?.value.trim() || '';
+  const finalName = rawName || formatDestinationUrlSubtitle(cleanUrl) || `Destination ${state.destinationUrls.length + 1}`;
+
+  const existing = document.querySelectorAll('#destination-urls-list .destination-url-card').length > 0
+    ? collectDestinationUrlsFromUI()
+    : [...(state.destinationUrls || [])];
+
+  existing.push({
+    id: 'dest_' + Date.now(),
+    name: finalName,
+    url: cleanUrl
   });
-  renderPresetsSettingsList();
+
+  await persistDestinationUrls(existing);
+  if (nameInput) nameInput.value = '';
+  if (urlInput) urlInput.value = '';
+
+  renderDestinationUrlsList();
+  renderQuickDestinationPills();
+  showToast(`Added destination "${finalName}".`, 'success');
 }
 
 async function handleTestSeafileConnection() {
@@ -2000,34 +1958,45 @@ function populateLibrarySelectWithRepos(repos) {
       select.appendChild(opt);
     });
   }
-  // Refresh preset dropdowns with newly loaded repos
-  renderPresetsSettingsList();
 }
 
 async function handleSaveSettings() {
   const url = document.getElementById('setting-server-url')?.value.trim();
   const token = document.getElementById('setting-token')?.value.trim();
-  const folder = document.getElementById('setting-folder')?.value.trim() || '/RocketScan';
+  const folder = document.getElementById('setting-folder')?.value.trim() || '/';
   const repoSelect = document.getElementById('setting-repo-select');
   const repoId = repoSelect?.value || '';
   const repoName = repoSelect?.options[repoSelect.selectedIndex]?.text.split(' (')[0] || '';
   const autoUpload = document.getElementById('setting-auto-upload')?.checked;
+  const saveCopyToGallery = document.getElementById('setting-save-gallery')?.checked !== false;
+  if (typeof StorageManager !== 'undefined' && typeof StorageManager.saveSettings === 'function') {
+    StorageManager.saveSettings({ saveCopyToGallery });
+  }
 
-  // Collect updated direct upload links
-  const collectedLinks = collectDirectLinksFromUI();
+  // Collect updated destination URLs (including any pending value in the add-URL inputs)
+  const collectedLinks = collectDestinationUrlsFromUI();
+  const pendingName = document.getElementById('new-dest-name')?.value.trim() || '';
+  const pendingUrl = document.getElementById('new-dest-url')?.value.trim() || '';
+  if (pendingUrl) {
+    collectedLinks.push({
+      id: 'dest_' + Date.now(),
+      name: pendingName || formatDestinationUrlSubtitle(pendingUrl),
+      url: pendingUrl
+    });
+  }
+
   const invalidLink = collectedLinks.find(l => l.name && !l.url);
   if (invalidLink) {
-    showToast(`Please enter a URL for "${invalidLink.name}" or delete it.`, 'warning');
+    showToast(`Please enter a URL for "${invalidLink.name}" or remove it.`, 'warning');
     return;
   }
-  const savedLinks = await persistDirectLinks(collectedLinks);
-
-  // Collect updated presets from config cards
-  const updatedPresets = collectPresetsFromUI();
-  if (updatedPresets.length > 0) {
-    state.presets = updatedPresets;
+  const savedLinks = await persistDestinationUrls(collectedLinks);
+  if (pendingUrl) {
+    const newNameEl = document.getElementById('new-dest-name');
+    const newUrlEl = document.getElementById('new-dest-url');
+    if (newNameEl) newNameEl.value = '';
+    if (newUrlEl) newUrlEl.value = '';
   }
-  localStorage.setItem('rocketscan_presets', JSON.stringify(state.presets));
 
   try {
     showLoading('Saving settings...');
@@ -2038,12 +2007,15 @@ async function handleSaveSettings() {
       repoName,
       folder,
       autoUpload,
-      presets: state.presets,
+      saveCopyToGallery,
+      destinationUrls: savedLinks,
       directLinks: savedLinks
     });
 
     if (updated && updated.config) {
-      state.seafileConfig = updated.config;
+      const cleanUpdated = { ...updated.config };
+      delete cleanUpdated.presets;
+      state.seafileConfig = cleanUpdated;
     } else {
       state.seafileConfig = {
         ...state.seafileConfig,
@@ -2052,7 +2024,8 @@ async function handleSaveSettings() {
         repoName,
         folder,
         autoUpload,
-        presets: state.presets,
+        saveCopyToGallery,
+        destinationUrls: savedLinks,
         directLinks: savedLinks
       };
     }
@@ -2061,7 +2034,7 @@ async function handleSaveSettings() {
     updateConnectionStatusUI();
     updateAutoSendUI();
     renderQuickDestinationPills();
-    showToast('Settings and destinations saved.', 'success');
+    showToast('Settings and destination URLs saved.', 'success');
   } catch (err) {
     // Still update local state when offline / standalone without Node backend
     state.seafileConfig = {
@@ -2071,7 +2044,8 @@ async function handleSaveSettings() {
       repoName,
       folder,
       autoUpload,
-      presets: state.presets,
+      saveCopyToGallery,
+      destinationUrls: savedLinks,
       directLinks: savedLinks
     };
     hideLoading();

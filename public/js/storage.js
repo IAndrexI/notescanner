@@ -4,6 +4,7 @@
  * and stores Seafile settings and Direct Links in localStorage.
  */
 const NOTESCAN_SETTINGS_KEY = 'notescan_settings';
+const NOTESCAN_DESTINATION_URLS_KEY = 'notescan_destination_urls';
 const NOTESCAN_DIRECT_LINKS_KEY = 'notescan_direct_links';
 
 // In-memory fallback when localStorage is unavailable (e.g. non-browser test runners)
@@ -43,9 +44,10 @@ class StorageManager {
       repoName: '',
       folder: '/',
       autoUpload: true,
+      saveCopyToGallery: true,
       filterDefault: 'magic',
-      presets: null,
       account: null,
+      destinationUrls: [],
       directLinks: []
     };
   }
@@ -60,7 +62,15 @@ class StorageManager {
     return `https://${trimmed}`;
   }
 
-  static normalizeDirectLinks(links) {
+  static _deriveNameFromUrl(url, fallbackIndex = 1) {
+    try {
+      const parsed = new URL(url);
+      if (parsed.hostname) return parsed.hostname;
+    } catch (e) {}
+    return `Destination ${fallbackIndex}`;
+  }
+
+  static normalizeDestinationUrls(links) {
     if (!Array.isArray(links)) return [];
     const result = [];
     for (let i = 0; i < links.length; i++) {
@@ -70,61 +80,80 @@ class StorageManager {
       if (!url) continue;
       const name = (item.name !== undefined && item.name !== null && String(item.name).trim())
         ? String(item.name).trim()
-        : `Direct Link ${result.length + 1}`;
+        : StorageManager._deriveNameFromUrl(url, result.length + 1);
       const id = (item.id !== undefined && item.id !== null && String(item.id).trim())
         ? String(item.id).trim()
-        : `dl_${Date.now()}_${i}`;
+        : `dest_${Date.now()}_${i}`;
       result.push({ id, name, url });
     }
     return result;
   }
 
+  static normalizeDirectLinks(links) {
+    return StorageManager.normalizeDestinationUrls(links);
+  }
+
   // -------------------------------------------------------------
-  // Direct Links Persistence (localStorage: notescan_direct_links)
+  // Destination URLs Persistence (localStorage: notescan_destination_urls)
   // -------------------------------------------------------------
-  static getDirectLinks() {
+  static getDestinationUrls() {
     const store = getKeyValueStore();
     try {
-      const raw = store.getItem(NOTESCAN_DIRECT_LINKS_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
+      const rawDest = store.getItem(NOTESCAN_DESTINATION_URLS_KEY);
+      if (rawDest) {
+        const parsed = JSON.parse(rawDest);
         if (Array.isArray(parsed)) {
-          return StorageManager.normalizeDirectLinks(parsed);
+          return StorageManager.normalizeDestinationUrls(parsed);
         }
       }
-      // Fallback: check inside settings if key wasn't populated separately
+      // Fallback: check legacy direct links key
+      const rawLegacy = store.getItem(NOTESCAN_DIRECT_LINKS_KEY);
+      if (rawLegacy) {
+        const parsed = JSON.parse(rawLegacy);
+        if (Array.isArray(parsed)) {
+          return StorageManager.normalizeDestinationUrls(parsed);
+        }
+      }
+      // Fallback: check inside settings if separate keys weren't populated
       const rawSettings = store.getItem(NOTESCAN_SETTINGS_KEY);
       if (rawSettings) {
         const parsedSettings = JSON.parse(rawSettings);
-        if (parsedSettings && Array.isArray(parsedSettings.directLinks)) {
-          return StorageManager.normalizeDirectLinks(parsedSettings.directLinks);
+        const list = Array.isArray(parsedSettings?.destinationUrls)
+          ? parsedSettings.destinationUrls
+          : parsedSettings?.directLinks;
+        if (Array.isArray(list)) {
+          return StorageManager.normalizeDestinationUrls(list);
         }
       }
     } catch (e) {
-      console.warn('[StorageManager] Failed to read direct links:', e.message);
+      console.warn('[StorageManager] Failed to read destination URLs:', e.message);
     }
     return [];
   }
 
-  static saveDirectLinks(links) {
+  static saveDestinationUrls(links) {
     const store = getKeyValueStore();
-    const normalized = StorageManager.normalizeDirectLinks(links);
+    const normalized = StorageManager.normalizeDestinationUrls(links);
     try {
-      store.setItem(NOTESCAN_DIRECT_LINKS_KEY, JSON.stringify(normalized));
+      const serialized = JSON.stringify(normalized);
+      store.setItem(NOTESCAN_DESTINATION_URLS_KEY, serialized);
+      store.setItem(NOTESCAN_DIRECT_LINKS_KEY, serialized);
       // Keep notescan_settings in sync if present
       const rawSettings = store.getItem(NOTESCAN_SETTINGS_KEY);
       if (rawSettings) {
         const parsed = JSON.parse(rawSettings) || {};
+        delete parsed.presets;
+        parsed.destinationUrls = normalized;
         parsed.directLinks = normalized;
         store.setItem(NOTESCAN_SETTINGS_KEY, JSON.stringify(parsed));
       }
     } catch (e) {
-      console.warn('[StorageManager] Failed to save direct links:', e.message);
+      console.warn('[StorageManager] Failed to save destination URLs:', e.message);
     }
     return normalized;
   }
 
-  static addDirectLink(nameOrObj, url) {
+  static addDestinationUrl(nameOrObj, url) {
     let name = '';
     let rawUrl = '';
     let id = '';
@@ -140,23 +169,23 @@ class StorageManager {
 
     const cleanUrl = StorageManager.normalizeUrl(rawUrl);
     if (!cleanUrl) {
-      throw new Error('A valid Direct Link URL is required.');
+      throw new Error('A valid Destination URL is required.');
     }
 
-    const links = StorageManager.getDirectLinks();
+    const links = StorageManager.getDestinationUrls();
     const newEntry = {
-      id: id ? String(id).trim() : `dl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-      name: (name && String(name).trim()) || cleanUrl,
+      id: id ? String(id).trim() : `dest_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      name: (name && String(name).trim()) || StorageManager._deriveNameFromUrl(cleanUrl, links.length + 1),
       url: cleanUrl
     };
 
     links.push(newEntry);
-    StorageManager.saveDirectLinks(links);
+    StorageManager.saveDestinationUrls(links);
     return newEntry;
   }
 
-  static removeDirectLink(idOrIndexOrUrl) {
-    const links = StorageManager.getDirectLinks();
+  static removeDestinationUrl(idOrIndexOrUrl) {
+    const links = StorageManager.getDestinationUrls();
     let updated;
     if (typeof idOrIndexOrUrl === 'number') {
       updated = links.filter((_, idx) => idx !== idOrIndexOrUrl);
@@ -164,11 +193,11 @@ class StorageManager {
       const target = String(idOrIndexOrUrl || '').trim();
       updated = links.filter(item => item.id !== target && item.url !== target);
     }
-    return StorageManager.saveDirectLinks(updated);
+    return StorageManager.saveDestinationUrls(updated);
   }
 
-  static updateDirectLink(idOrIndex, updates = {}) {
-    const links = StorageManager.getDirectLinks();
+  static updateDestinationUrl(idOrIndex, updates = {}) {
+    const links = StorageManager.getDestinationUrls();
     const idx = typeof idOrIndex === 'number'
       ? idOrIndex
       : links.findIndex(item => item.id === String(idOrIndex));
@@ -179,15 +208,28 @@ class StorageManager {
         id: links[idx].id
       };
     }
-    return StorageManager.saveDirectLinks(links);
+    return StorageManager.saveDestinationUrls(links);
   }
 
-  // Instance wrappers for Direct Links
-  getDirectLinks() { return StorageManager.getDirectLinks(); }
-  saveDirectLinks(links) { return StorageManager.saveDirectLinks(links); }
-  addDirectLink(nameOrObj, url) { return StorageManager.addDirectLink(nameOrObj, url); }
-  removeDirectLink(idOrIndexOrUrl) { return StorageManager.removeDirectLink(idOrIndexOrUrl); }
-  updateDirectLink(idOrIndex, updates) { return StorageManager.updateDirectLink(idOrIndex, updates); }
+  // Legacy Direct Links aliases (for backwards compatibility)
+  static getDirectLinks() { return StorageManager.getDestinationUrls(); }
+  static saveDirectLinks(links) { return StorageManager.saveDestinationUrls(links); }
+  static addDirectLink(nameOrObj, url) { return StorageManager.addDestinationUrl(nameOrObj, url); }
+  static removeDirectLink(idOrIndexOrUrl) { return StorageManager.removeDestinationUrl(idOrIndexOrUrl); }
+  static updateDirectLink(idOrIndex, updates) { return StorageManager.updateDestinationUrl(idOrIndex, updates); }
+
+  // Instance wrappers for Destination URLs & Direct Links
+  getDestinationUrls() { return StorageManager.getDestinationUrls(); }
+  saveDestinationUrls(links) { return StorageManager.saveDestinationUrls(links); }
+  addDestinationUrl(nameOrObj, url) { return StorageManager.addDestinationUrl(nameOrObj, url); }
+  removeDestinationUrl(idOrIndexOrUrl) { return StorageManager.removeDestinationUrl(idOrIndexOrUrl); }
+  updateDestinationUrl(idOrIndex, updates) { return StorageManager.updateDestinationUrl(idOrIndex, updates); }
+
+  getDirectLinks() { return StorageManager.getDestinationUrls(); }
+  saveDirectLinks(links) { return StorageManager.saveDestinationUrls(links); }
+  addDirectLink(nameOrObj, url) { return StorageManager.addDestinationUrl(nameOrObj, url); }
+  removeDirectLink(idOrIndexOrUrl) { return StorageManager.removeDestinationUrl(idOrIndexOrUrl); }
+  updateDirectLink(idOrIndex, updates) { return StorageManager.updateDestinationUrl(idOrIndex, updates); }
 
   // -------------------------------------------------------------
   // Settings / Seafile Configuration Persistence
@@ -213,11 +255,14 @@ class StorageManager {
       ...defaults,
       ...stored
     };
+    delete merged.presets;
 
     merged.serverUrl = (merged.serverUrl || '').trim().replace(/\/+$/, '');
     merged.token = (merged.token || '').trim();
     merged.hasToken = Boolean(merged.token || stored.hasToken);
-    merged.directLinks = StorageManager.getDirectLinks();
+    const urls = StorageManager.getDestinationUrls();
+    merged.destinationUrls = urls;
+    merged.directLinks = urls;
     return merged;
   }
 
@@ -225,10 +270,11 @@ class StorageManager {
     const store = getKeyValueStore();
     const current = StorageManager.getSettings();
     const next = { ...current };
+    delete next.presets;
 
     if (partial && typeof partial === 'object') {
       for (const [key, val] of Object.entries(partial)) {
-        if (val === undefined) continue;
+        if (val === undefined || key === 'presets') continue;
         if (key === 'token') {
           // Only overwrite token if non-empty or explicitly clearing
           if (val === null || partial.clearToken === true) {
@@ -241,8 +287,10 @@ class StorageManager {
           continue;
         }
         if (key === 'clearToken') continue;
-        if (key === 'directLinks') {
-          next.directLinks = StorageManager.saveDirectLinks(val);
+        if (key === 'destinationUrls' || key === 'directLinks') {
+          const savedUrls = StorageManager.saveDestinationUrls(val);
+          next.destinationUrls = savedUrls;
+          next.directLinks = savedUrls;
           continue;
         }
         if (key === 'serverUrl' && typeof val === 'string') {
