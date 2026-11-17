@@ -2,13 +2,24 @@
  * RocketScan Main Application Controller
  */
 
-// Default Rocketbook Quick-Send Destination Presets
+// Default Quick-Send Destination Presets
 const DEFAULT_PRESETS = [
-  { id: 'notes', name: 'Notes', icon: '📁', repoId: 'c1b2b0d8-da24-439b-8513-efd16263073a', repoName: 'scannednote', folder: '/' },
-  { id: 'work', name: 'Work', icon: '💼', repoId: 'c1b2b0d8-da24-439b-8513-efd16263073a', repoName: 'scannednote', folder: '/Work' },
-  { id: 'receipts', name: 'Receipts', icon: '🧾', repoId: 'c1b2b0d8-da24-439b-8513-efd16263073a', repoName: 'scannednote', folder: '/Receipts' },
-  { id: 'journal', name: 'Journal', icon: '📓', repoId: 'c1b2b0d8-da24-439b-8513-efd16263073a', repoName: 'scannednote', folder: '/Journal' }
+  { id: 'notes', name: 'Notes', repoId: 'c1b2b0d8-da24-439b-8513-efd16263073a', repoName: 'scannednote', folder: '/' },
+  { id: 'work', name: 'Work', repoId: 'c1b2b0d8-da24-439b-8513-efd16263073a', repoName: 'scannednote', folder: '/Work' },
+  { id: 'receipts', name: 'Receipts', repoId: 'c1b2b0d8-da24-439b-8513-efd16263073a', repoName: 'scannednote', folder: '/Receipts' },
+  { id: 'journal', name: 'Journal', repoId: 'c1b2b0d8-da24-439b-8513-efd16263073a', repoName: 'scannednote', folder: '/Journal' }
 ];
+
+const DIRECT_LINKS_STORAGE_KEY = 'notescan_direct_links';
+
+function escapeHtml(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 // Application State
 const state = {
@@ -29,6 +40,7 @@ const state = {
     autoUpload: true
   },
   presets: [...DEFAULT_PRESETS],
+  directLinks: [], // Array of { id, name, url }
   availableRepos: [],
   networkInfo: null,
   seafileFiles: []
@@ -49,14 +61,80 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadSeafileGallery();
 });
 
+async function loadDirectLinks(configLinks = null) {
+  let links = [];
+  try {
+    if (typeof storage.getDirectLinks === 'function') {
+      const storedLinks = await storage.getDirectLinks();
+      if (Array.isArray(storedLinks) && storedLinks.length > 0) {
+        links = storedLinks;
+      }
+    }
+  } catch (e) {
+    console.warn('Could not load direct links from IndexedDB:', e);
+  }
+
+  if (links.length === 0) {
+    const raw = localStorage.getItem(DIRECT_LINKS_STORAGE_KEY);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) links = parsed;
+      } catch (e) {}
+    }
+  }
+
+  if (links.length === 0 && Array.isArray(configLinks) && configLinks.length > 0) {
+    links = configLinks;
+  }
+
+  state.directLinks = links
+    .filter(item => item && typeof item === 'object')
+    .map((item, idx) => ({
+      id: item.id || `dl_${Date.now()}_${idx}`,
+      name: String(item.name || '').trim(),
+      url: String(item.url || '').trim()
+    }));
+
+  return state.directLinks;
+}
+
+async function persistDirectLinks(links) {
+  const normalized = (Array.isArray(links) ? links : [])
+    .filter(item => item && (item.name?.trim() || item.url?.trim()))
+    .map((item, idx) => ({
+      id: item.id || `dl_${Date.now()}_${idx}`,
+      name: String(item.name || 'Direct Link').trim(),
+      url: String(item.url || '').trim()
+    }))
+    .filter(item => item.url.length > 0);
+
+  state.directLinks = normalized;
+  localStorage.setItem(DIRECT_LINKS_STORAGE_KEY, JSON.stringify(normalized));
+
+  if (typeof storage.saveDirectLinks === 'function') {
+    try {
+      await storage.saveDirectLinks(normalized);
+    } catch (e) {
+      console.warn('Could not save direct links to storage:', e);
+    }
+  }
+
+  return normalized;
+}
+
 // Load backend config & network info
 async function loadConfigAndNetwork() {
   try {
-    const [cfg, net] = await Promise.all([
+    const [cfgRes, netRes] = await Promise.allSettled([
       SeafileApi.getConfig(),
       SeafileApi.getNetworkInfo()
     ]);
-    state.seafileConfig = cfg;
+
+    const cfg = cfgRes.status === 'fulfilled' && cfgRes.value ? cfgRes.value : state.seafileConfig;
+    const net = netRes.status === 'fulfilled' ? netRes.value : null;
+
+    state.seafileConfig = { ...state.seafileConfig, ...cfg };
     state.networkInfo = net;
 
     // Load presets from server, fallback to localStorage, fallback to DEFAULT_PRESETS
@@ -74,6 +152,8 @@ async function loadConfigAndNetwork() {
         state.presets = [...DEFAULT_PRESETS];
       }
     }
+
+    await loadDirectLinks(cfg.directLinks);
 
     const versionElem = document.getElementById('settings-app-version');
     if (versionElem && cfg.version) {
@@ -116,7 +196,14 @@ function updateAutoSendUI() {
   if (settingCheck) settingCheck.checked = isAuto;
 
   if (finishBtnText) {
-    finishBtnText.textContent = isAuto ? '⚡ 1-Tap Auto-Send to Seafile' : 'Save & Seafile Backup';
+    const isConnected = Boolean(state.seafileConfig.hasToken && state.seafileConfig.serverUrl);
+    if (isAuto && isConnected) {
+      finishBtnText.textContent = '1-Tap Auto-Send to Seafile';
+    } else if (isConnected) {
+      finishBtnText.textContent = 'Save & Seafile Backup';
+    } else {
+      finishBtnText.textContent = 'Save / Export';
+    }
   }
 }
 
@@ -126,7 +213,7 @@ async function handleToggleAutoSend(e) {
   updateAutoSendUI();
   try {
     await SeafileApi.saveConfig({ autoUpload: enabled });
-    showToast(enabled ? '⚡ 1-Tap Auto-Send enabled' : '1-Tap Auto-Send turned off', 'info');
+    showToast(enabled ? '1-Tap Auto-Send enabled' : '1-Tap Auto-Send turned off', 'info');
   } catch (err) {
     console.warn('Failed to save autoUpload setting:', err);
   }
@@ -147,11 +234,12 @@ function updateConnectionStatusUI() {
 
   if (state.seafileConfig.hasToken && state.seafileConfig.serverUrl) {
     badge.className = 'status-badge connected';
-    badge.innerHTML = `<span class="dot"></span> Seafile: Connected (${state.seafileConfig.repoName || 'Library selected'})`;
+    badge.innerHTML = `<span class="dot"></span> Seafile: Connected (${escapeHtml(state.seafileConfig.repoName || 'Library selected')})`;
   } else {
     badge.className = 'status-badge disconnected';
-    badge.innerHTML = `<span class="dot"></span> Seafile: Setup Required`;
+    badge.innerHTML = `<span class="dot"></span> Seafile: Optional (Not Connected)`;
   }
+  updateAutoSendUI();
 }
 
 // Initialize Camera
@@ -209,7 +297,7 @@ function initUI() {
       state.seafileConfig.repoName = repoName;
       state.seafileConfig.folder = subfolder;
       if (window.showToast) {
-        showToast(`✓ Detected Seafile Library "${repoName}" (${repoId.substring(0, 8)}...)`, 'info');
+        showToast(`Detected Seafile Library "${repoName}" (${repoId.substring(0, 8)}...)`, 'info');
       }
     }
   });
@@ -298,7 +386,7 @@ function initUI() {
     if (!handwritingConverter) return;
     handwritingConverter.applyToDocument();
     closeHandwritingConverterModal();
-    showToast('✓ Applied digital font to document!', 'success');
+    showToast('Applied digital font to document.', 'success');
   });
 
   // Multi-format Export Dropdown on Review Screen
@@ -358,6 +446,15 @@ function initUI() {
   document.getElementById('btn-save-settings')?.addEventListener('click', handleSaveSettings);
   document.getElementById('seafile-login-form')?.addEventListener('submit', handleSeafileLogin);
   document.getElementById('btn-add-preset')?.addEventListener('click', handleAddPreset);
+  document.getElementById('btn-add-direct-link')?.addEventListener('click', handleAddDirectLink);
+
+  // Inline Direct Link quick-send bar on Filter/Review screen
+  document.getElementById('btn-send-inline-direct-link')?.addEventListener('click', handleSendInlineDirectLink);
+  document.getElementById('btn-manage-direct-links')?.addEventListener('click', () => {
+    const bar = document.getElementById('inline-direct-link-bar');
+    if (bar) bar.style.display = 'none';
+    openSettingsModal({ focusDirectLinks: true });
+  });
 
   // Close modals on backdrop click
   document.querySelectorAll('.modal-backdrop').forEach(backdrop => {
@@ -774,9 +871,9 @@ async function handleRunConversion(mode) {
     const result = await handwritingConverter.processConversion(mode);
     hideLoading();
     if (result.count === 0) {
-      showToast('No handwriting detected in this area. Drawings were preserved!', 'info');
+      showToast('No handwriting detected in this area. Drawings were preserved.', 'info');
     } else {
-      showToast(`✓ Converted ${result.count} text line${result.count > 1 ? 's' : ''} to digital font! Drawings preserved.`, 'success');
+      showToast(`Converted ${result.count} text line${result.count > 1 ? 's' : ''} to digital font. Drawings preserved.`, 'success');
     }
   } catch (err) {
     hideLoading();
@@ -813,11 +910,11 @@ function updatePageBadge() {
 // Document Save, PDF Generation & Seafile Upload
 // -------------------------------------------------------------
 function handleFinishDoc() {
-  if (state.seafileConfig.autoUpload) {
+  if (state.seafileConfig.autoUpload && state.seafileConfig.hasToken && state.seafileConfig.serverUrl) {
     // 1-Tap Auto-Send: instantly upload to default library/folder
     handleUploadToSeafile();
   } else {
-    // Open modal for preview, title edit, download, etc.
+    // Open modal for preview, title edit, local download, share, or direct link upload
     openSaveDocModal();
   }
 }
@@ -868,17 +965,18 @@ function closeSaveDocModal() {
   if (modal) modal.classList.remove('active');
 }
 
-// Render Rocketbook-style Quick Destination Pills (both on review view and in save modal)
+// Render Quick Destination Pills (Seafile presets + Direct Upload Links)
 function renderQuickDestinationPills() {
   const containers = [
-    document.getElementById('quick-dest-pills'),
-    document.getElementById('modal-quick-dest-pills')
+    { el: document.getElementById('quick-dest-pills'), isReviewBar: true },
+    { el: document.getElementById('modal-quick-dest-pills'), isReviewBar: false }
   ];
 
-  containers.forEach(container => {
+  containers.forEach(({ el: container, isReviewBar }) => {
     if (!container) return;
     container.innerHTML = '';
 
+    // 1. Seafile destination presets (plain text labels)
     state.presets.forEach(preset => {
       const pill = document.createElement('button');
       pill.type = 'button';
@@ -887,10 +985,10 @@ function renderQuickDestinationPills() {
       pill.setAttribute('data-preset-id', preset.id);
 
       const folderName = preset.folder.split('/').filter(Boolean).pop() || preset.folder;
+      const folderDisplay = folderName === '/' ? '/' : `/${folderName}`;
       pill.innerHTML = `
-        <span class="dest-pill-icon">${preset.icon || '📁'}</span>
-        <span class="dest-pill-name">${preset.name}</span>
-        <span class="dest-pill-folder">/${folderName}</span>
+        <span class="dest-pill-name">${escapeHtml(preset.name)}</span>
+        <span class="dest-pill-folder">${escapeHtml(folderDisplay)}</span>
       `;
 
       pill.addEventListener('click', (e) => {
@@ -901,7 +999,134 @@ function renderQuickDestinationPills() {
 
       container.appendChild(pill);
     });
+
+    // 2. Configured Direct Upload Links (1-tap send without Seafile login)
+    (state.directLinks || []).forEach(link => {
+      if (!link || !link.url) return;
+      const pill = document.createElement('button');
+      pill.type = 'button';
+      pill.className = 'dest-pill dest-pill-direct';
+      pill.style.borderColor = 'var(--accent)';
+      pill.title = `1-Tap Direct Send to ${link.name || link.url}`;
+      pill.setAttribute('data-direct-link-id', link.id);
+
+      pill.innerHTML = `
+        <span class="dest-pill-name">${escapeHtml(link.name || 'Direct Link')}</span>
+        <span class="dest-pill-folder">Direct Link</span>
+      `;
+
+      pill.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        handleQuickSendDirectLink(link);
+      });
+
+      container.appendChild(pill);
+    });
+
+    // 3. Always expose "Direct Link" option on the Filter/Review destination bar
+    if (isReviewBar) {
+      const directActionPill = document.createElement('button');
+      directActionPill.type = 'button';
+      directActionPill.id = 'btn-review-direct-link';
+      directActionPill.className = 'dest-pill';
+      directActionPill.style.borderStyle = 'dashed';
+      directActionPill.title = 'Send directly to any URL or manage Direct Upload Links';
+      directActionPill.innerHTML = `
+        <span class="dest-pill-name">Direct Link</span>
+        <span class="dest-pill-folder">${state.directLinks.length > 0 ? 'Custom URL' : 'Set URL'}</span>
+      `;
+
+      directActionPill.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const bar = document.getElementById('inline-direct-link-bar');
+        const input = document.getElementById('inline-direct-link-url');
+        if (bar) {
+          const isHidden = bar.style.display === 'none' || !bar.style.display;
+          bar.style.display = isHidden ? 'flex' : 'none';
+          if (isHidden && input) input.focus();
+        } else {
+          openSettingsModal({ focusDirectLinks: true });
+        }
+      });
+
+      container.appendChild(directActionPill);
+    }
   });
+}
+
+// 1-Tap Quick-Send to configured Direct Link (no Seafile login required)
+async function handleQuickSendDirectLink(linkOrUrl, customName = '') {
+  const targetUrl = typeof linkOrUrl === 'string' ? linkOrUrl.trim() : String(linkOrUrl?.url || '').trim();
+  const linkName = (typeof linkOrUrl === 'object' ? linkOrUrl?.name : customName) || 'Direct Link';
+
+  if (!targetUrl) {
+    showToast('Please enter a valid direct upload URL.', 'warning');
+    return;
+  }
+
+  // Include active page if present
+  if (state.activePageCanvas) {
+    state.pages.push({
+      id: Date.now(),
+      canvas: state.activePageCanvas,
+      filter: state.activeFilter
+    });
+    state.activePageCanvas = null;
+    updatePageBadge();
+  }
+
+  if (state.pages.length === 0) {
+    showToast('Please scan or import at least one page first.', 'info');
+    return;
+  }
+
+  try {
+    const now = new Date();
+    const dateStr = now.toISOString().slice(0, 10);
+    const timeStr = String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0') + String(now.getSeconds()).padStart(2, '0');
+    const titleInput = document.getElementById('save-doc-title')?.value?.trim();
+    const baseName = titleInput || linkName.replace(/[^a-zA-Z0-9_\-]/g, '_') || 'NoteScan';
+    const fileName = `${baseName}_${dateStr}_${timeStr}.pdf`;
+
+    showToast(`Sending to ${linkName}...`, 'info');
+    showLoading(`Compiling PDF and sending to ${linkName}...`);
+
+    const pdfBlob = await PdfBuilder.createPdfFromPages(state.pages);
+
+    if (typeof SeafileApi.sendToDirectLink !== 'function') {
+      throw new Error('Direct link upload is not available.');
+    }
+    await SeafileApi.sendToDirectLink(targetUrl, pdfBlob, fileName);
+
+    hideLoading();
+    closeSaveDocModal();
+
+    const bar = document.getElementById('inline-direct-link-bar');
+    if (bar) bar.style.display = 'none';
+
+    showToast(`Sent "${fileName}" to ${linkName}.`, 'success');
+
+    // Reset current batch for next scan
+    state.pages = [];
+    state.activePageCanvas = null;
+    updatePageBadge();
+  } catch (err) {
+    hideLoading();
+    showToast('Direct upload error: ' + err.message, 'error');
+  }
+}
+
+async function handleSendInlineDirectLink() {
+  const input = document.getElementById('inline-direct-link-url');
+  const url = input?.value.trim() || '';
+  if (!url) {
+    showToast('Please enter a direct upload URL.', 'warning');
+    input?.focus();
+    return;
+  }
+  await handleQuickSendDirectLink(url, 'Direct Link');
 }
 
 // 1-Tap Quick-Send to destination preset with zero extra clicks
@@ -945,7 +1170,7 @@ async function handleQuickSend(preset) {
     const sanitizedName = preset.name.replace(/[^a-zA-Z0-9_\-]/g, '_');
     const fileName = `${sanitizedName}_${dateStr}_${timeStr}.pdf`;
 
-    showToast(`🚀 Quick-sending to ${preset.icon} ${preset.name} (${targetFolder})...`, 'info');
+    showToast(`Sending to ${preset.name} (${targetFolder})...`, 'info');
     showLoading(`Compiling PDF & 1-tap sending to ${preset.name}...`);
 
     const pdfBlob = await PdfBuilder.createPdfFromPages(state.pages);
@@ -965,8 +1190,8 @@ async function handleQuickSend(preset) {
     const viewUrl = uploadRes.viewUrl || (state.seafileConfig.serverUrl ? `${state.seafileConfig.serverUrl.replace(/\/+$/, '')}/#common/lib/${targetRepoId}/${encodeURIComponent(cleanPath)}` : '');
 
     // Immediate visual feedback toast with link/button to view in Seafile
-    showToast(`✓ Uploaded "${fileName}" to ${preset.icon} ${preset.name}!`, 'success', {
-      label: '👁️ View in Seafile',
+    showToast(`Uploaded "${fileName}" to ${preset.name}.`, 'success', {
+      label: 'View in Seafile',
       onClick: async () => {
         try {
           const directUrl = await SeafileApi.getFileUrl(targetRepoId, `/${cleanPath}`);
@@ -1182,7 +1407,7 @@ async function handleCopyQrShareUrl() {
       urlInput.select();
       document.execCommand('copy');
     }
-    showToast('✓ Share link copied to clipboard!', 'success');
+    showToast('Share link copied to clipboard.', 'success');
   } catch (err) {
     showToast('Could not copy link: ' + err.message, 'error');
   }
@@ -1325,8 +1550,8 @@ async function handleUploadToSeafile() {
     const viewUrl = uploadRes.viewUrl || (state.seafileConfig.serverUrl ? `${state.seafileConfig.serverUrl.replace(/\/+$/, '')}/#common/lib/${targetRepoId}/${encodeURIComponent(cleanPath)}` : '');
 
     // Immediate visual feedback toast with link/button to view in Seafile & Share link
-    showToast(`✓ Uploaded "${fileName}" to Seafile!`, 'success', {
-      label: '🔗 Get Share Link',
+    showToast(`Uploaded "${fileName}" to Seafile.`, 'success', {
+      label: 'Get Share Link',
       onClick: async () => {
         try {
           showLoading('Generating Seafile public share link...');
@@ -1337,8 +1562,8 @@ async function handleUploadToSeafile() {
             if (navigator.clipboard && navigator.clipboard.writeText) {
               await navigator.clipboard.writeText(shareUrl).catch(() => {});
             }
-            showToast(`📋 Public link copied: ${shareUrl}`, 'success', {
-              label: '🌐 Open URL',
+            showToast(`Public link copied: ${shareUrl}`, 'success', {
+              label: 'Open URL',
               onClick: () => window.open(shareUrl, '_blank')
             });
           }
@@ -1371,6 +1596,18 @@ async function loadSeafileGallery() {
   const emptyState = document.getElementById('gallery-empty');
   if (!grid) return;
 
+  if (!state.seafileConfig.hasToken || !state.seafileConfig.serverUrl) {
+    if (emptyState) emptyState.style.display = 'none';
+    grid.innerHTML = `
+      <div class="gallery-error">
+        <p>Seafile account not connected (optional).</p>
+        <p class="text-sm text-muted">You can scan, export locally, or send via Direct Upload Links without logging in. Connect a Seafile account in Settings to browse your Seafile library.</p>
+        <button class="btn btn-secondary mt-2" onclick="openSettingsModal()">Open Settings</button>
+      </div>
+    `;
+    return;
+  }
+
   grid.innerHTML = '<div class="loading-spinner"><div class="spinner"></div><p>Syncing notes with Seafile...</p></div>';
 
   try {
@@ -1386,6 +1623,9 @@ async function loadSeafileGallery() {
 
     if (emptyState) emptyState.style.display = 'none';
 
+    const pdfIconSvg = '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>';
+    const imgIconSvg = '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>';
+
     files.forEach(file => {
       const card = document.createElement('div');
       card.className = 'note-card';
@@ -1394,26 +1634,26 @@ async function loadSeafileGallery() {
       const sizeStr = file.size ? `${(file.size / 1024).toFixed(1)} KB` : '';
 
       card.innerHTML = `
-        <div class="note-card-icon">
-          ${file.isPdf ? '📄' : '🖼️'}
+        <div class="note-card-icon" style="display:flex;align-items:center;color:var(--accent);">
+          ${file.isPdf ? pdfIconSvg : imgIconSvg}
         </div>
         <div class="note-card-body">
-          <div class="note-card-title" title="${file.name}">${file.name}</div>
-          <div class="note-card-meta">${dateStr} • ${sizeStr}</div>
+          <div class="note-card-title" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</div>
+          <div class="note-card-meta">${escapeHtml(dateStr)} • ${escapeHtml(sizeStr)}</div>
         </div>
         <div class="note-card-actions">
-          <button class="btn-icon btn-open-note" data-path="${file.fullPath}" title="View / Download">
-            👁️ Open
+          <button class="btn-icon btn-open-note" data-path="${escapeHtml(file.fullPath)}" title="View / Download">
+            Open
           </button>
-          <button class="btn-icon btn-share-note" data-path="${file.fullPath}" title="Generate & Copy Public Share Link">
-            🔗 Link
+          <button class="btn-icon btn-share-note" data-path="${escapeHtml(file.fullPath)}" title="Generate & Copy Public Share Link">
+            Link
           </button>
-          <button class="btn-icon btn-qr-note" data-path="${file.fullPath}" title="Scan QR Code to Download on Phone">
-            📲 QR
+          <button class="btn-icon btn-qr-note" data-path="${escapeHtml(file.fullPath)}" title="Scan QR Code to Download on Phone">
+            QR
           </button>
           ${navigator.share ? `
-          <button class="btn-icon btn-webshare-note" data-path="${file.fullPath}" title="Share via AirDrop, WhatsApp, Slack">
-            📤 Share
+          <button class="btn-icon btn-webshare-note" data-path="${escapeHtml(file.fullPath)}" title="Share via AirDrop, WhatsApp, Slack">
+            Share
           </button>` : ''}
         </div>
       `;
@@ -1428,7 +1668,7 @@ async function loadSeafileGallery() {
     grid.innerHTML = `
       <div class="gallery-error">
         <p>Could not connect to Seafile library.</p>
-        <p class="text-sm">${err.message}</p>
+        <p class="text-sm">${escapeHtml(err.message)}</p>
         <button class="btn btn-secondary mt-2" onclick="openSettingsModal()">Check Settings</button>
       </div>
     `;
@@ -1458,8 +1698,8 @@ async function shareSeafileDocument(file) {
       if (navigator.clipboard && navigator.clipboard.writeText) {
         await navigator.clipboard.writeText(link).catch(() => {});
       }
-      showToast(`✓ Public share link copied to clipboard!`, 'success', {
-        label: '🌐 Open URL',
+      showToast('Public share link copied to clipboard.', 'success', {
+        label: 'Open URL',
         onClick: () => window.open(link, '_blank')
       });
     } else {
@@ -1485,17 +1725,17 @@ async function runSeafileHealthCheck() {
     if (health.healthy) {
       detailsBox.className = 'health-status-box healthy';
       detailsBox.innerHTML = `
-        <strong>✓ Healthy Seafile Connection</strong><br>
+        <strong>Healthy Seafile Connection</strong><br>
         <span>Latency: <strong>${health.latencyMs}ms</strong></span> • 
-        <span>User: <strong>${health.account?.email || health.account?.name || 'Authenticated'}</strong></span><br>
-        <span>Active Library: <strong>${health.activeRepoName || health.libraryInfo?.activeRepoName || 'Auto-selected'}</strong> (${health.libraryInfo?.totalLibraries || 0} total)</span>
+        <span>User: <strong>${escapeHtml(health.account?.email || health.account?.name || 'Authenticated')}</strong></span><br>
+        <span>Active Library: <strong>${escapeHtml(health.activeRepoName || health.libraryInfo?.activeRepoName || 'Auto-selected')}</strong> (${health.libraryInfo?.totalLibraries || 0} total)</span>
       `;
     } else {
       detailsBox.className = 'health-status-box unhealthy';
       detailsBox.innerHTML = `
-        <strong>⚠️ Connection Issue</strong><br>
-        <span>Status: ${health.status || 'Unhealthy'}</span><br>
-        <span class="text-xs">${health.error || health.message || 'Check URL and token.'}</span>
+        <strong>Connection Issue</strong><br>
+        <span>Status: ${escapeHtml(health.status || 'Unhealthy')}</span><br>
+        <span class="text-xs">${escapeHtml(health.error || health.message || 'Check URL and token.')}</span>
       `;
     }
   } catch (err) {
@@ -1507,7 +1747,7 @@ async function runSeafileHealthCheck() {
 // -------------------------------------------------------------
 // Settings Modal & Seafile Connection Manager
 // -------------------------------------------------------------
-function openSettingsModal() {
+function openSettingsModal(options = {}) {
   const modal = document.getElementById('modal-settings');
   if (!modal) return;
 
@@ -1521,9 +1761,14 @@ function openSettingsModal() {
   if (folderInput) folderInput.value = state.seafileConfig.folder || '/';
   if (autoUploadCheck) autoUploadCheck.checked = state.seafileConfig.autoUpload;
 
+  renderDirectLinksSettingsList();
   renderPresetsSettingsList();
 
   modal.classList.add('active');
+
+  if (options.focusDirectLinks) {
+    document.getElementById('settings-direct-links-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
 
   if (state.seafileConfig.hasToken && state.seafileConfig.serverUrl) {
     populateLibrarySelect();
@@ -1533,6 +1778,96 @@ function openSettingsModal() {
 function closeSettingsModal() {
   const modal = document.getElementById('modal-settings');
   if (modal) modal.classList.remove('active');
+}
+
+function collectDirectLinksFromUI() {
+  const cards = document.querySelectorAll('#direct-links-config-list .direct-link-config-card');
+  const collected = [];
+  cards.forEach((card, idx) => {
+    const id = card.getAttribute('data-link-id') || `dl_${Date.now()}_${idx}`;
+    const name = card.querySelector('.direct-link-name-input')?.value.trim() || '';
+    const url = card.querySelector('.direct-link-url-input')?.value.trim() || '';
+    collected.push({ id, name, url });
+  });
+  return collected;
+}
+
+function renderDirectLinksSettingsList() {
+  const container = document.getElementById('direct-links-config-list');
+  if (!container) return;
+
+  container.innerHTML = '';
+  if (!state.directLinks || state.directLinks.length === 0) {
+    const emptyMsg = document.createElement('p');
+    emptyMsg.className = 'text-xs text-muted';
+    emptyMsg.textContent = 'No direct upload links configured. Click "Add Link" to add a Seafile shared upload link or webhook URL.';
+    container.appendChild(emptyMsg);
+    return;
+  }
+
+  state.directLinks.forEach((link, index) => {
+    const card = document.createElement('div');
+    card.className = 'preset-config-card direct-link-config-card';
+    card.setAttribute('data-index', index);
+    card.setAttribute('data-link-id', link.id || `dl_${index}`);
+
+    card.innerHTML = `
+      <div class="preset-card-row-top">
+        <input type="text" class="form-control direct-link-name-input" value="${escapeHtml(link.name || '')}" placeholder="Label (e.g. Shared Upload, Webhook)">
+        <button type="button" class="btn-remove-preset btn-remove-direct-link" title="Delete Direct Link">Delete</button>
+      </div>
+      <div class="preset-card-row-bottom">
+        <input type="url" class="form-control direct-link-url-input" value="${escapeHtml(link.url || '')}" placeholder="https://seafile.example.com/u/d/..." title="Direct Upload URL">
+      </div>
+    `;
+
+    card.querySelector('.btn-remove-direct-link')?.addEventListener('click', () => {
+      state.directLinks = collectDirectLinksFromUI();
+      state.directLinks.splice(index, 1);
+      renderDirectLinksSettingsList();
+    });
+
+    container.appendChild(card);
+  });
+}
+
+function handleAddDirectLink() {
+  if (document.querySelectorAll('#direct-links-config-list .direct-link-config-card').length > 0) {
+    state.directLinks = collectDirectLinksFromUI();
+  }
+  state.directLinks.push({
+    id: 'dl_' + Date.now(),
+    name: `Direct Link ${state.directLinks.length + 1}`,
+    url: ''
+  });
+  renderDirectLinksSettingsList();
+
+  const inputs = document.querySelectorAll('#direct-links-config-list .direct-link-url-input');
+  const lastInput = inputs[inputs.length - 1];
+  if (lastInput) lastInput.focus();
+}
+
+function collectPresetsFromUI() {
+  const presetCards = document.querySelectorAll('#presets-config-list .preset-config-card');
+  const updatedPresets = [];
+  presetCards.forEach((card, idx) => {
+    const name = card.querySelector('.preset-name-input')?.value.trim() || `Preset ${idx + 1}`;
+    const repoSel = card.querySelector('.preset-repo-select');
+    const selectedRepoId = repoSel?.value || '';
+    const selectedRepoName = selectedRepoId && repoSel?.options[repoSel.selectedIndex]
+      ? repoSel.options[repoSel.selectedIndex].text.split(' (')[0]
+      : '';
+    const folderVal = card.querySelector('.preset-folder-input')?.value.trim() || '/RocketScan';
+
+    updatedPresets.push({
+      id: state.presets[idx]?.id || ('preset_' + idx),
+      name,
+      repoId: selectedRepoId,
+      repoName: selectedRepoName,
+      folder: folderVal.startsWith('/') ? folderVal : `/${folderVal}`
+    });
+  });
+  return updatedPresets;
 }
 
 // Render the customizable presets list in the Settings modal
@@ -1547,30 +1882,30 @@ function renderPresetsSettingsList() {
     card.setAttribute('data-index', index);
 
     // Build repo options
-    let repoOptions = `<option value="">(Default: ${state.seafileConfig.repoName || 'Primary Library'})</option>`;
+    let repoOptions = `<option value="">(Default: ${escapeHtml(state.seafileConfig.repoName || 'Primary Library')})</option>`;
     if (state.availableRepos && state.availableRepos.length > 0) {
       state.availableRepos.forEach(repo => {
         const isSelected = (preset.repoId === repo.id) ? 'selected' : '';
-        repoOptions += `<option value="${repo.id}" ${isSelected}>${repo.name}</option>`;
+        repoOptions += `<option value="${escapeHtml(repo.id)}" ${isSelected}>${escapeHtml(repo.name)}</option>`;
       });
     }
 
     card.innerHTML = `
       <div class="preset-card-row-top">
-        <input type="text" class="form-control preset-icon-input" value="${preset.icon || '📁'}" maxlength="4" title="Badge Emoji">
-        <input type="text" class="form-control preset-name-input" value="${preset.name || ''}" placeholder="Preset Label (e.g. Notes, Work)">
-        <button type="button" class="btn-remove-preset" title="Delete Preset" ${state.presets.length <= 1 ? 'disabled style="opacity:0.4"' : ''}>🗑️</button>
+        <input type="text" class="form-control preset-name-input" value="${escapeHtml(preset.name || '')}" placeholder="Preset Label (e.g. Notes, Work)">
+        <button type="button" class="btn-remove-preset" title="Delete Preset" ${state.presets.length <= 1 ? 'disabled style="opacity:0.4"' : ''}>Delete</button>
       </div>
       <div class="preset-card-row-bottom">
         <select class="form-control preset-repo-select" title="Target Library">
           ${repoOptions}
         </select>
-        <input type="text" class="form-control preset-folder-input" value="${preset.folder || '/RocketScan'}" placeholder="/RocketScan/Folder" title="Destination Subfolder">
+        <input type="text" class="form-control preset-folder-input" value="${escapeHtml(preset.folder || '/RocketScan')}" placeholder="/RocketScan/Folder" title="Destination Subfolder">
       </div>
     `;
 
     card.querySelector('.btn-remove-preset')?.addEventListener('click', () => {
       if (state.presets.length > 1) {
+        state.presets = collectPresetsFromUI();
         state.presets.splice(index, 1);
         renderPresetsSettingsList();
       }
@@ -1581,12 +1916,12 @@ function renderPresetsSettingsList() {
 }
 
 function handleAddPreset() {
-  const emojis = ['📚', '🏷️', '📦', '💡', '🎨', '🔖'];
-  const nextEmoji = emojis[state.presets.length % emojis.length];
+  if (document.querySelectorAll('#presets-config-list .preset-config-card').length > 0) {
+    state.presets = collectPresetsFromUI();
+  }
   state.presets.push({
     id: 'preset_' + Date.now(),
     name: `Custom ${state.presets.length + 1}`,
-    icon: nextEmoji,
     repoId: '',
     repoName: '',
     folder: `/RocketScan/Custom`
@@ -1607,7 +1942,7 @@ async function handleTestSeafileConnection() {
     showLoading('Connecting to Seafile server...');
     const res = await SeafileApi.testConnection(url, token);
     hideLoading();
-    showToast(`✓ Connected! Logged in as ${res.account.email || res.account.name}`, 'success');
+    showToast(`Connected. Logged in as ${res.account.email || res.account.name}`, 'success');
     populateLibrarySelectWithRepos(res.repos);
   } catch (err) {
     hideLoading();
@@ -1630,7 +1965,7 @@ async function handleSeafileLogin(e) {
     showLoading('Authenticating with Seafile...');
     const res = await SeafileApi.login(url, user, pass);
     hideLoading();
-    showToast(`✓ Logged in as ${res.account.email}!`, 'success');
+    showToast(`Logged in as ${res.account.email}.`, 'success');
     state.seafileConfig.serverUrl = url;
     state.seafileConfig.hasToken = true;
     updateConnectionStatusUI();
@@ -1678,29 +2013,17 @@ async function handleSaveSettings() {
   const repoName = repoSelect?.options[repoSelect.selectedIndex]?.text.split(' (')[0] || '';
   const autoUpload = document.getElementById('setting-auto-upload')?.checked;
 
+  // Collect updated direct upload links
+  const collectedLinks = collectDirectLinksFromUI();
+  const invalidLink = collectedLinks.find(l => l.name && !l.url);
+  if (invalidLink) {
+    showToast(`Please enter a URL for "${invalidLink.name}" or delete it.`, 'warning');
+    return;
+  }
+  const savedLinks = await persistDirectLinks(collectedLinks);
+
   // Collect updated presets from config cards
-  const presetCards = document.querySelectorAll('#presets-config-list .preset-config-card');
-  const updatedPresets = [];
-  presetCards.forEach((card, idx) => {
-    const icon = card.querySelector('.preset-icon-input')?.value.trim() || '📁';
-    const name = card.querySelector('.preset-name-input')?.value.trim() || `Preset ${idx + 1}`;
-    const repoSel = card.querySelector('.preset-repo-select');
-    const selectedRepoId = repoSel?.value || '';
-    const selectedRepoName = selectedRepoId && repoSel?.options[repoSel.selectedIndex]
-      ? repoSel.options[repoSel.selectedIndex].text.split(' (')[0]
-      : '';
-    const folderVal = card.querySelector('.preset-folder-input')?.value.trim() || '/RocketScan';
-
-    updatedPresets.push({
-      id: state.presets[idx]?.id || ('preset_' + idx),
-      name,
-      icon,
-      repoId: selectedRepoId,
-      repoName: selectedRepoName,
-      folder: folderVal.startsWith('/') ? folderVal : `/${folderVal}`
-    });
-  });
-
+  const updatedPresets = collectPresetsFromUI();
   if (updatedPresets.length > 0) {
     state.presets = updatedPresets;
   }
@@ -1715,19 +2038,48 @@ async function handleSaveSettings() {
       repoName,
       folder,
       autoUpload,
-      presets: state.presets
+      presets: state.presets,
+      directLinks: savedLinks
     });
 
-    state.seafileConfig = updated.config;
+    if (updated && updated.config) {
+      state.seafileConfig = updated.config;
+    } else {
+      state.seafileConfig = {
+        ...state.seafileConfig,
+        serverUrl: url || state.seafileConfig.serverUrl,
+        repoId,
+        repoName,
+        folder,
+        autoUpload,
+        presets: state.presets,
+        directLinks: savedLinks
+      };
+    }
     hideLoading();
     closeSettingsModal();
     updateConnectionStatusUI();
     updateAutoSendUI();
     renderQuickDestinationPills();
-    showToast('✓ Settings & destination presets saved!', 'success');
+    showToast('Settings and destinations saved.', 'success');
   } catch (err) {
+    // Still update local state when offline / standalone without Node backend
+    state.seafileConfig = {
+      ...state.seafileConfig,
+      serverUrl: url || state.seafileConfig.serverUrl,
+      repoId,
+      repoName,
+      folder,
+      autoUpload,
+      presets: state.presets,
+      directLinks: savedLinks
+    };
     hideLoading();
-    showToast('Save failed: ' + err.message, 'error');
+    closeSettingsModal();
+    updateConnectionStatusUI();
+    updateAutoSendUI();
+    renderQuickDestinationPills();
+    showToast('Settings saved locally.', 'success');
   }
 }
 

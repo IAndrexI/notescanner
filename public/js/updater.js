@@ -1,300 +1,388 @@
 /**
  * NoteScan In-App Updater (public/js/updater.js)
- * Checks for new releases on startup, shows an in-app modal / banner,
- * enables 1-tap direct download of NoteScan.apk, and 1-click server update from GitHub.
+ * Checks for new releases on startup and lets the user update with one tap.
  */
 class NoteScanUpdater {
+  static APK_FALLBACK_URL = 'https://github.com/IAndrexI/notescanner/raw/main/NoteScan.apk';
+  static DISMISS_TTL_MS = 24 * 60 * 60 * 1000;
+  static _initialized = false;
+  static _latestData = null;
+  static _escHandler = null;
+
   static init() {
-    // Check for updates on startup with a brief delay so camera and UI initialize smoothly
-    window.addEventListener('load', () => {
+    if (NoteScanUpdater._initialized) return;
+    NoteScanUpdater._initialized = true;
+
+    const scheduleCheck = () => {
       setTimeout(() => {
-        NoteScanUpdater.check({ manual: false }).catch(err => {
+        NoteScanUpdater.check({ manual: false }).catch((err) => {
           console.warn('[Updater] Startup check notice:', err.message);
         });
       }, 1500);
-    });
+    };
+
+    if (document.readyState === 'complete') {
+      scheduleCheck();
+    } else {
+      window.addEventListener('load', scheduleCheck, { once: true });
+    }
   }
 
   /**
-   * Check for GitHub releases updates and commits
+   * Check for available updates.
    * @param {Object} options
-   * @param {boolean} options.manual - True if triggered by user click (shows up-to-date toast)
-   * @param {boolean} options.simulate - True to simulate an available update for testing
+   * @param {boolean} options.manual - True when triggered by the user
+   * @param {boolean} options.simulate - True to simulate an available update
    */
   static async check(options = {}) {
     const { manual = false, simulate = false } = options;
 
     try {
-      if (manual && window.showToast) {
-        window.showToast('Checking GitHub for updates...', 'info');
+      if (manual) {
+        NoteScanUpdater.notify('Checking for updates...', 'info');
       }
 
-      const updateData = await SeafileApi.checkUpdates(simulate);
+      if (!window.SeafileApi || typeof window.SeafileApi.checkUpdates !== 'function') {
+        throw new Error('Update service is unavailable');
+      }
 
-      // Update version display in Settings if elements exist
+      const updateData = await window.SeafileApi.checkUpdates(simulate);
+      NoteScanUpdater._latestData = updateData;
+
       const gitCommitElem = document.getElementById('current-git-commit');
       if (gitCommitElem && updateData.localCommit) {
-        gitCommitElem.textContent = `${updateData.localCommit}`;
+        gitCommitElem.textContent = updateData.localCommit;
+      }
+
+      const versionElem = document.getElementById('settings-app-version');
+      if (versionElem && updateData.currentVersion) {
+        versionElem.textContent = updateData.currentVersion;
       }
 
       if (updateData.hasUpdate || updateData.hasGitUpdate) {
-        NoteScanUpdater.showUpdatePrompt(updateData);
+        NoteScanUpdater.showUpdatePrompt(updateData, { force: manual });
         NoteScanUpdater.showBadgeInHeader(updateData);
       } else if (manual) {
-        if (window.showToast) {
-          window.showToast(`✓ NoteScan is up to date (${updateData.localCommit || `v${updateData.currentVersion}`})!`, 'success');
-        }
+        const currentLabel = NoteScanUpdater.formatCurrentLabel(updateData);
+        NoteScanUpdater.notify(`NoteScan is up to date (${currentLabel}).`, 'success');
       }
+
       return updateData;
     } catch (err) {
       console.warn('[Updater] Check failed:', err);
-      if (manual && window.showToast) {
-        window.showToast(`Could not check for updates: ${err.message}`, 'error');
+      if (manual) {
+        NoteScanUpdater.notify(`Could not check for updates: ${err.message}`, 'error');
       }
       return { hasUpdate: false, error: err.message };
     }
   }
 
+  static notify(message, type = 'info') {
+    if (typeof window.showToast === 'function') {
+      window.showToast(message, type);
+    }
+  }
+
+  static escapeHtml(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  static formatCurrentLabel(data) {
+    if (data?.localCommit && data.localCommit !== 'unknown' && data.localCommit !== 'latest') {
+      return `commit ${data.localCommit}`;
+    }
+    return `v${String(data?.currentVersion || '1.0.0').replace(/^v/i, '')}`;
+  }
+
+  static formatTargetTitle(data) {
+    const currentVer = String(data?.currentVersion || '').replace(/^v/i, '').trim();
+    const latestVer = String(data?.latestVersion || '').replace(/^v/i, '').trim();
+    const sha = data?.latestCommit?.sha ? String(data.latestCommit.sha).trim() : '';
+
+    if (latestVer && latestVer !== currentVer && latestVer !== sha) {
+      return `NoteScan v${latestVer}`;
+    }
+    if (sha) {
+      return `commit ${sha}`;
+    }
+    if (latestVer) {
+      return `NoteScan v${latestVer}`;
+    }
+    return 'NoteScan';
+  }
+
+  static getTargetKey(data) {
+    return data?.latestCommit?.sha || data?.latestVersion || 'latest';
+  }
+
   /**
-   * Helper to detect if running inside Android APK / Capacitor native wrapper
+   * Detect if running inside a native wrapper (Capacitor / file / localhost mobile).
    */
   static isNative() {
+    const origin = window.location?.origin || '';
+    const ua = navigator.userAgent || '';
     return Boolean(
-      (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) ||
-      (window.location.origin.includes('localhost') && /Android|iPhone|iPad/i.test(navigator.userAgent)) ||
-      window.location.origin.startsWith('capacitor:') ||
-      window.location.origin.startsWith('file:')
+      window.Capacitor?.isNativePlatform?.() ||
+      (origin.includes('localhost') && /Android|iPhone|iPad/i.test(ua)) ||
+      origin.startsWith('capacitor:') ||
+      origin.startsWith('file:')
     );
   }
 
   /**
-   * Safely download the latest NoteScan.apk from GitHub
+   * Detect Android devices (native app or Android mobile browser).
    */
-  static downloadApk() {
-    if (window.showToast) {
-      window.showToast('📥 Downloading latest NoteScan.apk...', 'success');
+  static isAndroid() {
+    const platform = window.Capacitor?.getPlatform?.();
+    if (platform === 'android') return true;
+    if (platform === 'ios') return false;
+    return /Android/i.test(navigator.userAgent || '');
+  }
+
+  static getApkUrl(data = null) {
+    const candidate = data?.apkUrl || data?.apkDirectDownload;
+    if (candidate && /^https?:\/\//i.test(candidate)) {
+      return candidate;
     }
-    const apkUrl = 'https://github.com/IAndrexI/notescanner/raw/main/NoteScan.apk';
+    if (!NoteScanUpdater.isNative() && candidate) {
+      return candidate;
+    }
+    if (window.SeafileApi && typeof window.SeafileApi.getApkDownloadUrl === 'function') {
+      return window.SeafileApi.getApkDownloadUrl();
+    }
+    return NoteScanUpdater.APK_FALLBACK_URL;
+  }
+
+  /**
+   * Download the latest NoteScan APK.
+   */
+  static downloadApk(apkUrl = null) {
+    const url = apkUrl || NoteScanUpdater.getApkUrl(NoteScanUpdater._latestData);
+    NoteScanUpdater.notify('Downloading NoteScan.apk...', 'success');
+
     const a = document.createElement('a');
-    a.href = apkUrl;
+    a.href = url;
     a.download = 'NoteScan.apk';
     a.target = '_blank';
+    a.rel = 'noopener noreferrer';
     document.body.appendChild(a);
     a.click();
     setTimeout(() => a.remove(), 1000);
   }
 
   /**
-   * Action handler for settings update button
+   * Primary update action: download APK on Android/mobile, or update & reload on web.
    */
-  static handleUpdateAction() {
-    if (NoteScanUpdater.isNative()) {
-      NoteScanUpdater.downloadApk();
-    } else {
-      NoteScanUpdater.applyServerUpdate();
+  static handleUpdateAction(data = null) {
+    return NoteScanUpdater.updateNow(data || NoteScanUpdater._latestData);
+  }
+
+  static updateNow(data = null) {
+    const info = data || NoteScanUpdater._latestData;
+    if (NoteScanUpdater.isAndroid()) {
+      NoteScanUpdater.downloadApk(NoteScanUpdater.getApkUrl(info));
+      return;
     }
+    return NoteScanUpdater.applyWebUpdate();
+  }
+
+  static async clearCachesAndReload() {
+    if ('serviceWorker' in navigator) {
+      try {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        for (const reg of registrations) {
+          await reg.update();
+        }
+      } catch (e) {}
+    }
+    if ('caches' in window) {
+      try {
+        const keys = await caches.keys();
+        for (const key of keys) {
+          await caches.delete(key);
+        }
+      } catch (e) {}
+    }
+    window.location.reload();
   }
 
   /**
-   * Apply 1-Click Server Update directly from GitHub
+   * Update and reload the web app. If a local backend supports /api/updates/apply,
+   * apply it first; otherwise clear caches and reload cleanly.
    */
-  static async applyServerUpdate() {
-    if (NoteScanUpdater.isNative()) {
-      NoteScanUpdater.downloadApk();
+  static async applyWebUpdate() {
+    if (NoteScanUpdater.isAndroid()) {
+      NoteScanUpdater.downloadApk(NoteScanUpdater.getApkUrl(NoteScanUpdater._latestData));
       return;
     }
 
-    if (window.showLoading) {
-      window.showLoading('Pulling latest update from GitHub and restarting...');
+    if (typeof window.showLoading === 'function') {
+      window.showLoading('Updating NoteScan...');
     }
 
     try {
-      const targetUrl = SeafileApi.apiUrl ? SeafileApi.apiUrl('/api/updates/apply') : '/api/updates/apply';
-      const res = await fetch(targetUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-      });
+      if (!NoteScanUpdater.isNative()) {
+        const targetUrl = window.SeafileApi?.apiUrl
+          ? window.SeafileApi.apiUrl('/api/updates/apply')
+          : '/api/updates/apply';
 
-      const text = await res.text();
-      let data = {};
-      try {
-        data = JSON.parse(text);
-      } catch (parseErr) {
-        throw new Error('Server returned HTML or non-JSON response. If running on Android, please download NoteScan.apk.');
-      }
-
-      if (!res.ok) {
-        throw new Error(data.error || 'Server update failed');
-      }
-
-      if (window.showToast) {
-        window.showToast('✓ Update applied! Restarting NoteScan in 3 seconds...', 'success');
-      }
-
-      // Clear Service Worker cache before reloading
-      if ('serviceWorker' in navigator) {
         try {
-          const regs = await navigator.serviceWorker.getRegistrations();
-          for (const r of regs) await r.update();
-          if ('caches' in window) {
-            const keys = await caches.keys();
-            for (const k of keys) await caches.delete(k);
+          const res = await fetch(targetUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+          });
+
+          const contentType = res.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            const payload = await res.json();
+            if (res.ok && payload?.success) {
+              NoteScanUpdater.notify('Update applied. Reloading NoteScan...', 'success');
+              setTimeout(() => {
+                NoteScanUpdater.clearCachesAndReload();
+              }, 3000);
+              return;
+            }
+            // If server returned a 5xx error during git update, surface it cleanly
+            if (res.status >= 500 && payload?.error) {
+              throw new Error(payload.error);
+            }
           }
-        } catch (e) {}
+        } catch (fetchErr) {
+          // If it's a 5xx update error we threw above, rethrow; otherwise fall back to cache-busting reload
+          if (fetchErr && fetchErr.message && fetchErr.message.startsWith('Update failed:')) {
+            throw fetchErr;
+          }
+        }
       }
 
-      setTimeout(() => {
-        window.location.reload(true);
-      }, 3500);
-
+      NoteScanUpdater.notify('Reloading to latest version...', 'info');
+      await NoteScanUpdater.clearCachesAndReload();
     } catch (err) {
-      if (window.hideLoading) window.hideLoading();
-      if (window.showToast) {
-        window.showToast(`Update notice: ${err.message}`, 'error');
+      if (typeof window.hideLoading === 'function') {
+        window.hideLoading();
       }
+      NoteScanUpdater.notify(`Update notice: ${err.message}`, 'error');
     }
   }
 
+  // Backwards-compatible alias
+  static applyServerUpdate() {
+    return NoteScanUpdater.applyWebUpdate();
+  }
+
   /**
-   * Show in-app update banner / modal
+   * Show a clean, simple update dialog.
    */
-  static showUpdatePrompt(data) {
-    const targetVersion = data.latestCommit?.sha || data.latestVersion || 'latest';
-    const dismissedKey = `notescan_dismissed_update_${targetVersion}`;
-    const dismissedTime = localStorage.getItem(dismissedKey);
-    // If dismissed in the last 24 hours, skip automatic popup
-    if (dismissedTime && (Date.now() - parseInt(dismissedTime, 10)) < 24 * 60 * 60 * 1000) {
-      return;
+  static showUpdatePrompt(data, options = {}) {
+    const { force = false } = options;
+    const targetKey = NoteScanUpdater.getTargetKey(data);
+
+    if (!force) {
+      const dismissedTime = localStorage.getItem(`notescan_dismissed_update_${targetKey}`);
+      if (dismissedTime && (Date.now() - parseInt(dismissedTime, 10)) < NoteScanUpdater.DISMISS_TTL_MS) {
+        return;
+      }
     }
 
-    // Remove existing update modal or banner if present
     const existing = document.getElementById('notescan-updater-modal');
     if (existing) existing.remove();
+    if (NoteScanUpdater._escHandler) {
+      document.removeEventListener('keydown', NoteScanUpdater._escHandler);
+      NoteScanUpdater._escHandler = null;
+    }
 
-    const apkUrl = data.apkDirectDownload || SeafileApi.getApkDownloadUrl();
-    const releaseTitle = data.releaseName || (data.latestCommit ? `GitHub Commit ${data.latestCommit.sha}` : `NoteScan v${data.latestVersion}`);
-    const commitMsg = data.latestCommit?.message || data.releaseNotes || 'New features, bug fixes, and performance updates from GitHub.';
-    const sanitizedNotes = commitMsg.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
-
-    const isNativeApp = NoteScanUpdater.isNative();
-    const serverBtnStyle = isNativeApp ? 'style="display: none;"' : '';
-    const apkBtnClass = isNativeApp ? 'btn-primary' : 'btn-secondary';
-    const apkBtnSubtext = isNativeApp ? 'Tap to download and install latest update' : 'For Android standalone app';
+    const titleText = `Update Available: ${NoteScanUpdater.formatTargetTitle(data)}`;
+    const currentLabel = NoteScanUpdater.formatCurrentLabel(data);
+    const targetLabel = NoteScanUpdater.formatTargetTitle(data);
+    const rawNotes = data?.latestCommit?.message || data?.releaseNotes || '';
+    const sanitizedNotes = NoteScanUpdater.escapeHtml(rawNotes).replace(/\n/g, '<br>');
 
     const modal = document.createElement('div');
     modal.id = 'notescan-updater-modal';
     modal.className = 'updater-backdrop';
 
     modal.innerHTML = `
-      <div class="updater-dialog animate-fade-in">
+      <div class="updater-dialog animate-fade-in" role="dialog" aria-modal="true" aria-labelledby="updater-dialog-title">
         <div class="updater-header">
           <div class="updater-header-title">
-            <span class="updater-sparkle">🚀</span>
             <div>
-              <h3>Update Available</h3>
-              <p class="updater-version-tag">${releaseTitle}</p>
+              <h3 id="updater-dialog-title">${NoteScanUpdater.escapeHtml(titleText)}</h3>
             </div>
           </div>
-          <button class="updater-close-btn" id="btn-updater-close" title="Dismiss">×</button>
+          <button type="button" class="updater-close-btn" id="btn-updater-close" title="Dismiss" aria-label="Dismiss">&times;</button>
         </div>
 
         <div class="updater-body">
           <div class="updater-version-pills">
-            <span class="version-pill current">Installed: ${data.localCommit || `v${data.currentVersion}`}</span>
-            <span class="version-arrow">➔</span>
-            <span class="version-pill latest">GitHub: ${data.latestCommit?.sha || data.latestVersion}</span>
+            <span class="version-pill current">Current: ${NoteScanUpdater.escapeHtml(currentLabel)}</span>
+            <span class="version-arrow">to</span>
+            <span class="version-pill latest">New: ${NoteScanUpdater.escapeHtml(targetLabel)}</span>
           </div>
-
-          <div class="updater-release-box">
-            <div class="updater-release-header">What's New on GitHub:</div>
-            <div class="updater-release-content">${sanitizedNotes}</div>
-          </div>
-
-          <div class="updater-options-notice">
-            Choose how you would like to apply this update:
-          </div>
+          ${sanitizedNotes ? `
+            <div class="updater-release-box">
+              <div class="updater-release-header">Release Notes</div>
+              <div class="updater-release-content">${sanitizedNotes}</div>
+            </div>
+          ` : ''}
         </div>
 
         <div class="updater-actions">
-          <!-- 1-Tap APK Download for Android users -->
-          <a href="${apkUrl}" id="btn-updater-apk" class="btn ${apkBtnClass} updater-btn-apk" download="NoteScan.apk">
-            <span>📲</span>
-            <div class="btn-text-group">
-              <span class="btn-primary-text">Download Updated NoteScan.apk</span>
-              <span class="btn-subtext">${apkBtnSubtext}</span>
-            </div>
-          </a>
-
-          <!-- 1-Click Server Update (Pulls from GitHub and restarts) -->
-          <button id="btn-updater-server-apply" class="btn btn-primary updater-btn-server" ${serverBtnStyle}>
-            <span>🚀</span>
-            <div class="btn-text-group">
-              <span class="btn-primary-text">1-Click Update Server from GitHub</span>
-              <span class="btn-subtext">Pulls latest code & restarts NoteScan service</span>
-            </div>
+          <button type="button" id="btn-updater-update" class="btn btn-primary" style="width: 100%; justify-content: center;">
+            Update Now
           </button>
-
-          <div class="updater-secondary-row">
-            <button id="btn-updater-reload" class="btn btn-ghost updater-btn-reload">
-              <span>🔄 Web Reload</span>
-            </button>
-            <button id="btn-updater-later" class="btn btn-ghost updater-btn-later">
-              Dismiss
-            </button>
-          </div>
+          <button type="button" id="btn-updater-later" class="btn btn-ghost updater-btn-later" style="width: 100%;">
+            Dismiss
+          </button>
         </div>
       </div>
     `;
 
     document.body.appendChild(modal);
 
-    // Event listeners
     document.getElementById('btn-updater-close')?.addEventListener('click', () => {
-      NoteScanUpdater.dismiss(targetVersion);
+      NoteScanUpdater.dismiss(targetKey);
     });
 
     document.getElementById('btn-updater-later')?.addEventListener('click', () => {
-      NoteScanUpdater.dismiss(targetVersion);
+      NoteScanUpdater.dismiss(targetKey);
     });
 
-    document.getElementById('btn-updater-server-apply')?.addEventListener('click', () => {
-      NoteScanUpdater.dismiss(targetVersion);
-      NoteScanUpdater.applyServerUpdate();
+    document.getElementById('btn-updater-update')?.addEventListener('click', () => {
+      NoteScanUpdater.dismiss(targetKey);
+      NoteScanUpdater.updateNow(data);
     });
 
-    document.getElementById('btn-updater-apk')?.addEventListener('click', () => {
-      if (window.showToast) {
-        window.showToast('📥 Downloading NoteScan.apk...', 'success');
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) {
+        NoteScanUpdater.dismiss(targetKey);
       }
-      setTimeout(() => {
-        NoteScanUpdater.dismiss(targetVersion);
-      }, 2000);
     });
 
-    document.getElementById('btn-updater-reload')?.addEventListener('click', async () => {
-      if (window.showToast) {
-        window.showToast('Clearing cache and reloading...', 'info');
+    NoteScanUpdater._escHandler = (e) => {
+      if (e.key === 'Escape') {
+        NoteScanUpdater.dismiss(targetKey);
       }
-      if ('serviceWorker' in navigator) {
-        try {
-          const registrations = await navigator.serviceWorker.getRegistrations();
-          for (let reg of registrations) await reg.update();
-          if ('caches' in window) {
-            const keys = await caches.keys();
-            for (let key of keys) await caches.delete(key);
-          }
-        } catch (e) {}
-      }
-      window.location.reload(true);
-    });
+    };
+    document.addEventListener('keydown', NoteScanUpdater._escHandler);
   }
 
   static dismiss(version) {
+    if (NoteScanUpdater._escHandler) {
+      document.removeEventListener('keydown', NoteScanUpdater._escHandler);
+      NoteScanUpdater._escHandler = null;
+    }
+
     const modal = document.getElementById('notescan-updater-modal');
     if (modal) {
       modal.classList.add('fade-out');
-      setTimeout(() => modal.remove(), 250);
+      setTimeout(() => modal.remove(), 200);
     }
+
     if (version) {
       localStorage.setItem(`notescan_dismissed_update_${version}`, Date.now().toString());
     }
@@ -305,15 +393,16 @@ class NoteScanUpdater {
     if (!headerNav || document.getElementById('nav-update-pill')) return;
 
     const pill = document.createElement('button');
+    pill.type = 'button';
     pill.id = 'nav-update-pill';
-    pill.className = 'nav-tab nav-update-badge animate-pulse';
+    pill.className = 'nav-tab nav-update-badge';
     pill.innerHTML = `
-      <span class="tab-icon">🚀</span>
+      <span class="pulse-dot"></span>
       <span class="tab-label">Update</span>
     `;
-    pill.title = 'New version or commit available from GitHub';
+    pill.title = `Update Available: ${NoteScanUpdater.formatTargetTitle(data)}`;
     pill.addEventListener('click', () => {
-      NoteScanUpdater.showUpdatePrompt(data);
+      NoteScanUpdater.showUpdatePrompt(data, { force: true });
     });
 
     headerNav.insertBefore(pill, headerNav.firstChild);
